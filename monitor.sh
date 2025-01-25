@@ -49,17 +49,19 @@ EOF
 function monitor() {
 
 # Define o alvo externo que você quer testar
-ALVO="8.8.8.8"
+local ALVO="8.8.8.8"
 
 # Captura o nome do host atual
-HOSTNAME_LOCAL=$(hostname)
+local HOSTNAME_LOCAL=$(hostname)
 
 # Define diretório de logs
-LOG_DIR="$PWD/logs/$HOSTNAME_LOCAL"
+local LOG_DIR="$PWD/logs/$HOSTNAME_LOCAL"
 mkdir -p "$LOG_DIR"
 
 # Define o nome do arquivo de log (com a data do dia)
-LOG_FILE="$LOG_DIR/$(date +'%Y%m%d')-mtr.csv"
+local TIMESTAMP
+TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+LOG_FILE="$LOG_DIR/${TIMESTAMP}-mtr.csv"
 
 # Executa MTR para o alvo externo e **não** imprime cabeçalhos adicionais
 mtr -r -C "$ALVO" > "$LOG_FILE"
