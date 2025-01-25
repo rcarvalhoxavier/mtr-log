@@ -6,30 +6,33 @@ Este repositório contém um script em Shell que **monitora** a conectividade de
 
 1. [Recursos Principais](#recursos-principais)
 2. [Requisitos](#requisitos)
-3. [Instalação](#instala%C3%A7%C3%A3o)
+3. [Instalação](#instalação)
 4. [Uso](#uso)
 5. [Importando Dados no SQLite](#importando-dados-no-sqlite)
 6. [Agendamento com Crontab](#agendamento-com-crontab)
-7. [Customizações](#customiza%C3%A7%C3%B5es)
-8. [Licença](#licen%C3%A7a)
+7. [Customizações](#customizações)
+8. [Licença](#licença)
 
+---
 
 ## Recursos Principais
 
-* Executa o `mtr` de forma não interativa e salva a saída em **CSV**.
-* Armazena os resultados no arquivo `mtr_data.db` (banco **SQLite**).
-* Cria logs separados por **hostname** e com **timestamp** (data/hora no nome do arquivo).
-* É simples de configurar e estender para outros objetivos.
+- Executa o `mtr` de forma não interativa e salva a saída em **CSV**.
+- Armazena os resultados em `mtr_data.db` (banco **SQLite**).
+- Cria logs separados por **hostname** e com **timestamp** (data/hora) no nome do arquivo.
+- É simples de configurar e estender para outros objetivos de monitoramento.
 
+---
 
 ## Requisitos
 
-* **Linux** (testado em distribuições como Ubuntu, Debian e similares)
-* **mtr** instalado (>= 0.85 preferencialmente)
-* **SQLite3** instalado (>= 3.0)
+- **Linux** (testado em distribuições como Ubuntu, Debian e similares)
+- **mtr** instalado (>= 0.85 preferencialmente)
+- **SQLite3** instalado (>= 3.0)
 
-O script verifica se o `mtr` e `sqlite3` estão instalados. Caso não estejam, ele avisa e encerra.
+O script verifica se o `mtr` e o `sqlite3` estão instalados. Caso não estejam, ele avisa e encerra.
 
+---
 
 ## Instalação
 
@@ -43,62 +46,69 @@ O script verifica se o `mtr` e `sqlite3` estão instalados. Caso não estejam, e
    chmod +x monitor.sh
    ```
 3. **Instale** as dependências (se ainda não o fez):
-   * Ubuntu/Debian:
+   - **Ubuntu/Debian**:
      ```bash
      sudo apt-get update
      sudo apt-get install mtr sqlite3
      ```
-   * Fedora/CentOS:
+   - **Fedora/CentOS**:
      ```bash
      sudo dnf install mtr sqlite
      ```
-   * Ou [instale manualmente o sqlite3](https://www.sqlite.org/download.html) se precisar de versão diferente.
+   - Ou [instale manualmente o sqlite3](https://www.sqlite.org/download.html) se precisar de versão diferente.
 
+---
 
 ## Uso
 
-Execute o script principal:
+Para executar manualmente:
 
 ```bash
 ./monitor.sh
 ```
 
-O fluxo será:
-1. **Verificar** se o MTR e o SQLite3 estão instalados.
-2. **Criar** (se não existir) o banco `mtr_data.db` e a tabela `mtr_data`.
-3. **Executar** o MTR contra um alvo (por padrão `8.8.8.8`) e gerar um arquivo CSV com timestamp no nome.
-4. **Importar** esse CSV no banco de dados `mtr_data.db`.
+O que acontece nesse script:
+
+1. **Verifica** se o MTR e o SQLite3 estão instalados.
+2. **Cria** (se não existir) o banco `mtr_data.db` e a tabela `mtr_data`.
+3. **Executa** o MTR contra um alvo (por padrão `8.8.8.8`) e gera um arquivo CSV com data/hora no nome.
+4. **Importa** esse CSV para o banco de dados `mtr_data.db`.
 
 ### Estrutura dos arquivos gerados
 
-* **logs/SEU_HOSTNAME**: diretório criado para cada máquina (onde `hostname` retorna `SEU_HOSTNAME`).
-  * Dentro dele, serão criados arquivos CSV no formato `YYYYMMDD_HHMMSS-mtr.csv`, por exemplo:
+- **logs/SEU_HOSTNAME**: diretório criado para cada máquina (onde `hostname` retorna `SEU_HOSTNAME`).
+  - Dentro dele, serão criados arquivos CSV no formato `YYYYMMDD_HHMMSS-mtr.csv`, por exemplo:
     ```
     logs/maquina01/20250124_135500-mtr.csv
     logs/maquina01/20250124_140000-mtr.csv
     ...
     ```
-* **mtr_data.db**: banco de dados SQLite com a tabela `mtr_data`, criada por padrão com colunas compatíveis com a saída CSV padrão do MTR.
+- **mtr_data.db**: banco de dados SQLite contendo a tabela `mtr_data`. Por padrão, o script cria colunas compatíveis com o CSV **padrão** do `mtr -C`.
 
- 1. **Mtr_Version:** Versão do MTR que gerou o registro. Exemplo de valor: MTR.0.95.
- 2. **Start_Time:** Momento em que o teste foi iniciado, geralmente representado em Unix Epoch (segundos desde 1970-01-01) ou outro formato textual. Exemplo de valor: 1737689464 (equivalente a uma data/hora específica em UTC).
- 3. **Status:** Indica o estado do teste ou resultado, podendo ser “OK” ou outro código.
- 4. **Host:** Host (ou IP) de destino que está sendo testado pelo MTR. Exemplo de valor: 1.1.1.1 ou google.com.
- 5. **Hop:** Número do salto (hop) na rota até o destino. Inicia em 1, 2, etc. Exemplo de valor: 1 (gateway local).
- 6. **Ip:** Endereço IP (ou nome) do hop analisado. Pode ser _gateway, IPs reais, etc. Exemplo de valor: 100.68.0.1 ou _gateway.
- 7. **Loss:** Porcentagem de pacotes perdidos (loss) para aquele hop.
- 8. **Snt:** Quantidade de pacotes enviados (Sent) para aquele hop durante o teste.
- 9. **Last:** Latência (em milissegundos) da última medição de ping naquele hop.
-10. **Avg:** Latência média (em ms) considerando todas as medições naquele hop.
-11. **Best:** Melhor (menor) tempo de resposta observado (em ms).
-12. **Wrst:** Pior (maior) tempo de resposta observado (em ms).
-13. **StDev:** Desvio padrão (em ms) da latência, calculado a partir das medições.
+#### Colunas (Exemplo de Layout)
+
+Algumas colunas típicas que podem aparecer no CSV do MTR são:
+
+1. **Mtr_Version:** –  Versão do MTR que gerou o registro.
+2. **Start_Time:** –  Momento em que o teste foi iniciado, geralmente representado em Unix Epoch (segundos desde 1970-01-01) ou outro formato textual.
+3. **Status:** –  Indica o estado do teste ou resultado, podendo ser “OK” ou outro código.
+4. **Host** – Host ou IP de destino do hop.
+5. **Hop:** – Número do salto (hop) na rota até o destino. Inicia em 1, 2, etc. Exemplo de valor: 1 (gateway local).
+6. **Loss%** – Porcentagem de pacotes perdidos.
+7. **Snt** – Número de pacotes enviados.
+8. **Last** – Latência do último pacote (ms).
+9. **Avg** – Latência média (ms).
+10. **Best** – Melhor (menor) latência (ms).
+11. **Wrst** – Pior (maior) latência (ms).
+12. **StDev** – Desvio padrão (ms).
+
+Se o seu MTR gerar colunas adicionais (por exemplo `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), ajuste o **CREATE TABLE** em `monitor.sh` conforme necessário.
 
 ---
 
 ## Importando Dados no SQLite
 
-Se quiser **verificar** os dados armazenados, use o próprio SQLite:
+Caso queira **verificar** os dados armazenados no banco:
 
 ```bash
 sqlite3 mtr_data.db
@@ -109,34 +119,40 @@ SELECT * FROM mtr_data LIMIT 10;
 
 Isso listará as 10 primeiras entradas. Você também pode usar ferramentas como [DB Browser for SQLite](https://sqlitebrowser.org/) para visualização mais amigável.
 
+---
 
 ## Agendamento com Crontab
 
-Para rodar a cada 5 minutos automaticamente:
+Para executar automaticamente a cada 5 minutos:
 
-1. Edite o **crontab**:
+1. Edite o **crontab** do usuário desejado:
    ```bash
    crontab -e
    ```
-2. Adicione uma linha (ajuste o caminho completo do script):
+2. Adicione uma linha (ajustando o caminho completo do script):
    ```bash
    */5 * * * * /home/usuario/mtr-log/monitor.sh
    ```
-3. Salve o arquivo. O script será executado a cada 5 minutos, gerando um novo CSV e importando os dados.
+3. Salve o arquivo. O script será executado a cada 5 minutos, gerando um novo CSV (com data/hora no nome) e importando para `mtr_data.db`.
 
+> **Observação**: Quando executado via cron, o diretório de trabalho pode ser diferente. No script, usamos `SCRIPT_DIR="$(dirname "$(realpath "$0")")"` para garantir que os arquivos de log e o banco sejam criados no local do script.
+
+---
 
 ## Customizações
 
-* **Alterar o alvo**: No script `run_mtr.sh`, procure pela variável `ALVO="8.8.8.8"` e mude para o IP ou hostname que deseja monitorar.
-* **Quantidade de pacotes (ciclos)**: Ajuste a opção `-c 5` para outro valor se quiser mais/menos amostragem.
-* **Estrutura da Tabela**: Se quiser armazenar mais dados (IP do hop, ou timestamp etc.), edite a função `setup_database` no script e adapte a forma que o CSV é gerado (por exemplo, usando `-o "colunas"` no MTR).
-* **Rodar em IPv6**: Acrescente `-6` no comando do MTR, se seu sistema tiver IPv6 configurado.
+- **Alterar o alvo**: No script `monitor.sh`, procure pela variável `ALVO="8.8.8.8"` e mude para o IP ou hostname que deseja monitorar.
+- **Quantidade de pacotes (ciclos)**: Ajuste a opção `-c 5` para outro valor (ex.: `-c 10`) se quiser mais amostragens por execução.
+- **Estrutura da Tabela**: Se quiser armazenar mais dados (timestamp, hop, IP, etc.), edite a função que cria a tabela e ajuste o CSV gerado (pode usar `-o "col1 col2..."` no MTR ou usar um MTR custom).
+- **Rodar em IPv6**: Acrescente `-6` no comando do MTR, se seu sistema tiver IPv6 configurado.
 
+---
 
 ## Licença
 
-Este projeto está licenciado sob a [MIT License](LICENSE) - sinta-se livre para usá-lo, modificá-lo e distribuí-lo conforme suas necessidades.
+Este projeto está licenciado sob a [MIT License](LICENSE). Fique à vontade para usá-lo, modificá-lo e distribuí-lo conforme suas necessidades.
 
+---
 
 **Dúvidas ou sugestões?**
-Crie uma [Issue](https://github.com/seu-usuario/mtr-monitor/issues) neste repositório ou envie um Pull Request!
+Crie uma [issue](https://github.com/rcarvalhoxavier/mtr-log/issues) neste repositório ou envie um Pull Request!
