@@ -55,7 +55,8 @@ local ALVO="8.8.8.8"
 local HOSTNAME_LOCAL=$(hostname)
 
 # Define diretório de logs
-local LOG_DIR="$PWD/logs/$HOSTNAME_LOCAL"
+local SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+local LOG_DIR="$SCRIPT_DIR/logs/$HOSTNAME_LOCAL"
 mkdir -p "$LOG_DIR"
 
 # Define o nome do arquivo de log (com a data do dia)
