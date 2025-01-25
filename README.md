@@ -1,8 +1,6 @@
-Below is an **English** version of your README, keeping the same structure while making the text clear and concise.
-
----
-
 # MTR Monitor
+
+> [Leia isso em Português](./README.pt-BR.md)
 
 This repository contains a Shell script that **monitors** a host’s connectivity using [mtr (My Traceroute)](https://github.com/traviscross/mtr) and stores the results in a [SQLite](https://www.sqlite.org/index.html) database. It is ideal for checking **internet connection quality** at regular intervals and **preserving** historical data in a simple way.
 
