@@ -24,14 +24,14 @@ CREATE TABLE IF NOT EXISTS mtr_data (
     Host TEXT,
     Hop TEXT,
     Ip TEXT,
-    Loss TEXT,
-    Snt TEXT,
+    Loss REAL,
+    Snt REAL,
     Empty TEXT,
-    Last TEXT,
-    Avg TEXT,
-    Best TEXT,
-    Wrst TEXT,
-    StDev TEXT
+    Last REAL,
+    Avg REAL,
+    Best REAL,
+    Wrst REAL,
+    StDev REAL
 );
 .quit
 EOF
