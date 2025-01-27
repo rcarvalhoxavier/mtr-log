@@ -39,7 +39,7 @@ EOF
 
 function import_data() {
 # Importa os dados do arquivo CSV para o banco de dados
-sqlite3 mtr_data.db <<EOF
+sqlite3 $SCRIPT_DIR/mtr_data.db <<EOF
 .import --csv --skip 1 "$LOG_FILE" mtr_data
 .quit
 EOF
@@ -55,7 +55,7 @@ local ALVO="8.8.8.8"
 local HOSTNAME_LOCAL=$(hostname)
 
 # Define diretório de logs
-local SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 local LOG_DIR="$SCRIPT_DIR/logs/$HOSTNAME_LOCAL"
 mkdir -p "$LOG_DIR"
 
