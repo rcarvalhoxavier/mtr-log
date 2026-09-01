@@ -169,6 +169,8 @@ Para executar automaticamente a cada 5 minutos:
 
 > **Observação**: Quando executado via cron, o diretório de trabalho pode ser diferente. No script, usamos `SCRIPT_DIR="$(dirname "$(realpath "$0")")"` para garantir que os arquivos de log e o banco sejam criados no local do script.
 
+> **Observação para testes e experimentos**: o `monitor.sh` grava em `$MTR_DB` quando essa variável está definida, e cai no banco ao lado do script quando não está. Sempre exporte `MTR_DB` apontando para um arquivo descartável antes de dar `source` no script — rodar a suíte de testes ou um import manual contra o `mtr_data.db` de verdade injeta linhas fabricadas num banco que o cron alimenta a cada 5 minutos.
+
 ---
 
 ## Customizações

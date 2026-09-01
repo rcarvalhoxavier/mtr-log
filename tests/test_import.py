@@ -1,4 +1,5 @@
 """Testes do import do monitor.sh: idempotência e tratamento de CSV vazio."""
+import os
 import pathlib
 import sqlite3
 import subprocess
@@ -35,11 +36,18 @@ class TestImport(unittest.TestCase):
         self.dir.cleanup()
 
     def rodar_import(self, arquivo, vezes=1):
-        """Carrega monitor.sh sem executar main e chama as funções de import."""
+        """Carrega monitor.sh sem executar main e chama as funções de import.
+
+        O banco vem de MTR_DB, definido ANTES do source. A versão anterior
+        atribuía DB depois — e monitor.sh fixava o banco de produção em tempo
+        de source, então trocar a ordem destas duas linhas era suficiente para
+        a suíte escrever no mtr_data.db real, que o cron alimenta a cada 5
+        minutos. Com o override por ambiente, a ordem deixa de importar.
+        """
         chamadas = "\n".join(["import_data"] * vezes)
         script = f"""
+        export MTR_DB='{self.db}'
         source '{MONITOR}'
-        DB='{self.db}'
         LOG_FILE='{arquivo}'
         setup_database
         {chamadas}
@@ -109,11 +117,79 @@ class TestImport(unittest.TestCase):
         self.assertEqual(self.contar(), 0)
 
     def test_staging_fica_limpa(self):
-        self.rodar_import(self.csv)
+        """Só significa alguma coisa se o import tiver de fato terminado bem:
+        um .import que falhasse deixaria a staging limpa do mesmo jeito, porque
+        o DELETE final rodava mesmo depois do erro."""
+        resultado = self.rodar_import(self.csv)
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
         con = sqlite3.connect(self.db)
         try:
             self.assertEqual(
                 con.execute("SELECT COUNT(*) FROM mtr_raw").fetchone()[0], 0
+            )
+        finally:
+            con.close()
+
+
+class TestBancoConfiguravel(unittest.TestCase):
+    """Nada impedia a suíte de escrever no banco de produção."""
+
+    def test_mtr_db_definido_antes_do_source_vence(self):
+        with tempfile.TemporaryDirectory() as base:
+            alvo = pathlib.Path(base) / "descartavel.db"
+            resultado = subprocess.run(
+                ["bash", "-c", f"export MTR_DB='{alvo}'\nsource '{MONITOR}'\necho \"$DB\""],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(resultado.stdout.strip(), str(alvo))
+
+    def test_sem_mtr_db_o_padrao_continua_o_banco_ao_lado_do_script(self):
+        """O override não pode mudar o comportamento em produção, onde o cron
+        chama o script sem variável nenhuma. Só lê o valor; não escreve."""
+        resultado = subprocess.run(
+            ["bash", "-c", f"unset MTR_DB\nsource '{MONITOR}'\necho \"$DB\""],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(resultado.stdout.strip(), str(RAIZ / "mtr_data.db"))
+
+
+class TestFalhaDeImport(unittest.TestCase):
+    """Sem `.bail on`, um .import que falha não interrompe o resto: o INSERT
+    seguinte roda e o DELETE final limpa a staging. O cron via sucesso."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.base = pathlib.Path(self.dir.name)
+        self.db = self.base / "mtr_data.db"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    @unittest.skipIf(os.geteuid() == 0, "root lê arquivo sem permissão de leitura")
+    def test_csv_ilegivel_devolve_erro_e_nao_promove_nada(self):
+        ilegivel = self.base / "ilegivel.csv"
+        ilegivel.write_text(CSV, encoding="utf-8")
+        ilegivel.chmod(0o000)
+        try:
+            resultado = subprocess.run(
+                ["bash", "-c", f"""
+                export MTR_DB='{self.db}'
+                source '{MONITOR}'
+                LOG_FILE='{ilegivel}'
+                setup_database
+                import_data
+                """],
+                capture_output=True, text=True,
+            )
+        finally:
+            ilegivel.chmod(0o644)
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout)
+        self.assertIn("falha ao importar", resultado.stderr)
+        con = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM mtr_data").fetchone()[0], 0
             )
         finally:
             con.close()

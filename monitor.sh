@@ -4,7 +4,13 @@
 # monitor() e usava caminho relativo ao CWD, então pelo cron a tabela nascia
 # num banco e os dados iam para outro.
 SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
-DB="$SCRIPT_DIR/mtr_data.db"
+# MTR_DB existe para que os testes apontem para um banco descartável sem
+# depender da ordem das linhas. Antes, DB era atribuído incondicionalmente em
+# tempo de `source` e o teste só era seguro porque sobrescrevia a variável
+# DEPOIS — inverter duas linhas fazia a suíte escrever no banco de produção,
+# que o cron alimenta a cada 5 minutos. Em produção ninguém define MTR_DB e o
+# padrão continua sendo o banco ao lado do script.
+DB="${MTR_DB:-$SCRIPT_DIR/mtr_data.db}"
 SCHEMA="$SCRIPT_DIR/scripts/schema.sql"
 
 # Alvo externo a ser testado.
@@ -35,7 +41,14 @@ function import_data() {
 
     # O .import exige uma tabela com a forma exata do CSV, daí a staging.
     # O INSERT OR IGNORE contra a chave primária torna o import idempotente.
-    sqlite3 "$DB" <<EOF
+    #
+    # `.bail on` faz o sqlite3 parar no primeiro erro. Sem ele, um .import que
+    # falha não interrompe nada: o INSERT seguinte roda mesmo assim e o DELETE
+    # final ainda limpa a staging, apagando o rastro. Com o código de saída
+    # checado logo abaixo, uma coleta perdida vira falha visível para o cron em
+    # vez de sucesso silencioso.
+    if ! sqlite3 "$DB" <<EOF
+.bail on
 DELETE FROM mtr_raw;
 .import --csv --skip 1 "$LOG_FILE" mtr_raw
 INSERT OR IGNORE INTO mtr_data
@@ -58,6 +71,10 @@ SELECT
 FROM mtr_raw;
 DELETE FROM mtr_raw;
 EOF
+    then
+        echo "falha ao importar $LOG_FILE para $DB" >&2
+        return 1
+    fi
 }
 
 function monitor() {

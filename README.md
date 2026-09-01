@@ -169,6 +169,8 @@ To run the script automatically every 5 minutes:
 
 > **Note**: When run by cron, the working directory may differ. In the script, we use `SCRIPT_DIR="$(dirname "$(realpath "$0")")"` to ensure logs and the database are created in the script’s own directory.
 
+> **Note for tests and experiments**: `monitor.sh` writes to `$MTR_DB` when that variable is set, falling back to the database next to the script. Always export `MTR_DB` pointing at a throwaway file before sourcing the script — running the test suite or any manual import against the live `mtr_data.db` injects fabricated rows into a database that cron is appending to every 5 minutes.
+
 ---
 
 ## Customizations
