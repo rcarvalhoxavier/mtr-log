@@ -1,13 +1,21 @@
 #!/bin/bash
 
+# Resolvido no topo, antes de qualquer função: setup_database rodava antes de
+# monitor() e usava caminho relativo ao CWD, então pelo cron a tabela nascia
+# num banco e os dados iam para outro.
+SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+DB="$SCRIPT_DIR/mtr_data.db"
+SCHEMA="$SCRIPT_DIR/scripts/schema.sql"
+
+# Alvo externo a ser testado.
+ALVO="8.8.8.8"
+
 function check_dependencies() {
-    # Verifica se o MTR está instalado
     if ! command -v mtr &> /dev/null; then
         echo "MTR não está instalado. Por favor, instale-o antes de continuar. https://github.com/traviscross/mtr"
         exit 1
     fi
 
-    # Verifica se o SQLite3 está instalado
     if ! command -v sqlite3 &> /dev/null; then
         echo "SQLite3 não está instalado. Por favor, instale-o antes de continuar. https://www.sqlite.org/download.html"
         exit 1
@@ -15,57 +23,55 @@ function check_dependencies() {
 }
 
 function setup_database() {
-    # Cria o banco de dados SQLite3 e a tabela
-    sqlite3 mtr_data.db <<EOF
-CREATE TABLE IF NOT EXISTS mtr_data (
-    Mtr_Version TEXT,
-    Start_Time TEXT,
-    Status TEXT,
-    Host TEXT,
-    Hop TEXT,
-    Ip TEXT,
-    Loss REAL,
-    Snt REAL,
-    Empty TEXT,
-    Last REAL,
-    Avg REAL,
-    Best REAL,
-    Wrst REAL,
-    StDev REAL
-);
-.quit
-EOF
+    sqlite3 "$DB" < "$SCHEMA"
 }
 
 function import_data() {
-# Importa os dados do arquivo CSV para o banco de dados
-sqlite3 $SCRIPT_DIR/mtr_data.db <<EOF
-.import --csv --skip 1 "$LOG_FILE" mtr_data
-.quit
+    # O mtr falha de vez em quando e deixa um arquivo de zero byte.
+    if [ ! -s "$LOG_FILE" ]; then
+        echo "sem saída do mtr em $LOG_FILE; nada a importar" >&2
+        return 0
+    fi
+
+    # O .import exige uma tabela com a forma exata do CSV, daí a staging.
+    # O INSERT OR IGNORE contra a chave primária torna o import idempotente.
+    sqlite3 "$DB" <<EOF
+DELETE FROM mtr_raw;
+.import --csv --skip 1 "$LOG_FILE" mtr_raw
+INSERT OR IGNORE INTO mtr_data
+    (ts, host, hop, ip, loss, snt, drops, last, avg, best, wrst, stdev, version, status)
+SELECT
+    CAST(Start_Time AS INTEGER),
+    Host,
+    CAST(Hop AS INTEGER),
+    NULLIF(Ip, '???'),
+    CAST(Loss AS REAL),
+    CAST(Snt AS INTEGER),
+    CAST(Drops AS INTEGER),
+    CAST(Last AS REAL),
+    CAST(Avg AS REAL),
+    CAST(Best AS REAL),
+    CAST(Wrst AS REAL),
+    CAST(StDev AS REAL),
+    Mtr_Version,
+    Status
+FROM mtr_raw;
+DELETE FROM mtr_raw;
 EOF
 }
 
-
 function monitor() {
+    local HOSTNAME_LOCAL
+    HOSTNAME_LOCAL=$(hostname)
 
-# Define o alvo externo que você quer testar
-local ALVO="8.8.8.8"
+    local LOG_DIR="$SCRIPT_DIR/logs/$HOSTNAME_LOCAL"
+    mkdir -p "$LOG_DIR"
 
-# Captura o nome do host atual
-local HOSTNAME_LOCAL=$(hostname)
+    local TIMESTAMP
+    TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+    LOG_FILE="$LOG_DIR/${TIMESTAMP}-mtr.csv"
 
-# Define diretório de logs
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-local LOG_DIR="$SCRIPT_DIR/logs/$HOSTNAME_LOCAL"
-mkdir -p "$LOG_DIR"
-
-# Define o nome do arquivo de log (com a data do dia)
-local TIMESTAMP
-TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
-LOG_FILE="$LOG_DIR/${TIMESTAMP}-mtr.csv"
-
-# Executa MTR para o alvo externo e **não** imprime cabeçalhos adicionais
-mtr -r -C "$ALVO" > "$LOG_FILE"
+    mtr -r -C "$ALVO" > "$LOG_FILE"
 }
 
 function main() {
@@ -75,4 +81,7 @@ function main() {
     import_data
 }
 
-main
+# Só executa quando chamado diretamente; permite `source` nos testes.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main
+fi
