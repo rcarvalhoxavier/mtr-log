@@ -3,3 +3,4 @@
 *.csv
 dashboard.html
 *.db.bak-*
+__pycache__/

@@ -77,8 +77,19 @@ class TestGeracao(unittest.TestCase):
             self.assertNotIn(proibido, self.html)
 
     def test_registra_a_troca_de_rota(self):
+        """Checar só as duas substrings não bastava: elas aparecem na página
+        em qualquer ordem, então trocar as colunas `de` e `para` na tabela
+        passaria em silêncio — e este é o único teste que guarda a correção de
+        um Critical anterior. A asserção pina a ordem das células: hop, de
+        (IP antigo), para (IP novo)."""
         self.assertIn("142.251.200.106", self.html)
         self.assertIn("209.85.173.108", self.html)
+        self.assertIn(
+            '<td class="num">3</td>'
+            "<td>142.251.200.106</td>"
+            "<td>209.85.173.108</td>",
+            self.html,
+        )
 
     def test_separa_perda_real_de_artefato(self):
         """O hop 4 perde 100% nas 30 execuções, mas o destino só perde em uma.

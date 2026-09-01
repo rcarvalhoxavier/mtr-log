@@ -97,14 +97,15 @@ Algumas colunas típicas que podem aparecer no CSV do MTR são:
 3. **Status:** –  Indica o estado do teste ou resultado, podendo ser “OK” ou outro código.
 4. **Host** – Host ou IP de destino do hop.
 5. **Hop:** – Número do salto (hop) na rota até o destino. Inicia em 1, 2, etc. Exemplo de valor: 1 (gateway local).
-6. **Loss%** – Porcentagem de pacotes perdidos.
-7. **Snt** – Número de pacotes enviados.
-8. **Drops** – Contador de pacotes perdidos. No CSV bruto do MTR essa coluna **não tem nome no cabeçalho** (um campo em branco entre `Snt` e `Last`); versões anteriores deste README nem chegavam a documentá-la. Na tabela tipada `mtr_data` (ver `scripts/schema.sql`) ela é armazenada como a coluna `drops`.
-9. **Last** – Latência do último pacote (ms).
-10. **Avg** – Latência média (ms).
-11. **Best** – Melhor (menor) latência (ms).
-12. **Wrst** – Pior (maior) latência (ms).
-13. **StDev** – Desvio padrão (ms).
+6. **Ip** – Endereço que respondeu naquele hop, seja um IP ou um hostname reverso (`_gateway`, `100.70.0.1`, `dns.google`). O MTR escreve `???` quando o hop não respondeu, e o import converte isso em `NULL`. É a coluna sobre a qual toda a classificação de segmento é construída — a `v_hop` a lê para decidir se um hop é `lan`, `cgnat`, `transito` ou `desconhecido` — então não a remova ao ajustar o schema.
+7. **Loss%** – Porcentagem de pacotes perdidos.
+8. **Snt** – Número de pacotes enviados.
+9. **Drops** – Contador de pacotes perdidos. No CSV bruto do MTR essa coluna **não tem nome no cabeçalho** (um campo em branco entre `Snt` e `Last`); versões anteriores deste README nem chegavam a documentá-la. Na tabela tipada `mtr_data` (ver `scripts/schema.sql`) ela é armazenada como a coluna `drops`.
+10. **Last** – Latência do último pacote (ms).
+11. **Avg** – Latência média (ms).
+12. **Best** – Melhor (menor) latência (ms).
+13. **Wrst** – Pior (maior) latência (ms).
+14. **StDev** – Desvio padrão (ms).
 
 Se o seu MTR gerar colunas adicionais (por exemplo `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), ajuste a definição do schema em `scripts/schema.sql` conforme necessário — esse arquivo é a fonte única da estrutura do banco, aplicada tanto por `monitor.sh` quanto por `scripts/migrate.sh`.
 
@@ -149,7 +150,15 @@ O relatório tem três painéis, cada um respondendo a uma pergunta:
 bash scripts/migrate.sh
 ```
 
-O script é idempotente (rodá-lo novamente num banco já migrado não faz nada) e sempre cria um backup com timestamp (`mtr_data.db.bak-YYYYMMDD_HHMMSS`) antes de alterar qualquer coisa.
+O script é idempotente: num banco já migrado ele apenas reaplica as views e sai, **sem** criar backup — não há o que salvar, porque nada é alterado. O backup com timestamp (`mtr_data.db.bak-YYYYMMDD_HHMMSS`) só é criado no caminho que de fato migra dados, imediatamente antes de renomear a tabela antiga.
+
+Os códigos de saída importam para quem chama o script de dentro de outro:
+
+| Código | Significado |
+|---|---|
+| `0` | Migração concluída, ou banco já migrado (no-op). |
+| `1` | Nada foi alterado: banco ou arquivo de schema não encontrado, ou a contagem de linhas da origem e do destino divergiu. No caso da divergência, tanto a tabela `mtr_legacy` quanto o backup são preservados. |
+| `2` | **O banco ficou meio-migrado.** Foi encontrada uma tabela `mtr_legacy` remanescente de uma execução abortada, então esta execução se recusou a tocar em qualquer coisa. Resolva à mão — restaure o backup, ou remova `mtr_legacy` se `mtr_data` já estiver correta — antes de rodar de novo. |
 
 ---
 
@@ -176,7 +185,7 @@ Para executar automaticamente a cada 5 minutos:
 ## Customizações
 
 - **Alterar o alvo**: No script `monitor.sh`, procure pela variável `ALVO="8.8.8.8"` e mude para o IP ou hostname que deseja monitorar.
-- **Quantidade de pacotes (ciclos)**: Ajuste a opção `-c 5` para outro valor (ex.: `-c 10`) se quiser mais amostragens por execução.
+- **Quantidade de pacotes (ciclos)**: O script roda `mtr -r -C "$ALVO"` e **não** passa opção `-c`, então vale o padrão do próprio MTR — 10 ciclos por execução, e é por isso que `Snt` vale 10 em 415.777 dos 415.797 registros coletados. Acrescente `-c N` àquele comando (ex.: `mtr -r -C -c 20 "$ALVO"`) se quiser mais amostragens por execução.
 - **Estrutura da Tabela**: Se quiser armazenar mais dados (timestamp, hop, IP, etc.), edite a função que cria a tabela e ajuste o CSV gerado (pode usar `-o "col1 col2..."` no MTR ou usar um MTR custom).
 - **Rodar em IPv6**: Acrescente `-6` no comando do MTR, se seu sistema tiver IPv6 configurado.
 
