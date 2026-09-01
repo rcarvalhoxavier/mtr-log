@@ -31,10 +31,16 @@ def ultimo_ts(con):
 
 
 def latencia_diaria(con, desde_ts=None):
-    """p50 e p95 da latência do destino, por dia."""
+    """p50 e p95 da latência do destino, por dia.
+
+    Só entram traces completas: numa execução truncada o último hop é o
+    roteador local, e a latência dele não é latência até o destino. Sem esse
+    filtro, 2025-11-30 — dia em que as 287 execuções pararam no gateway —
+    aparecia como o dia mais rápido da série, com 1,24 ms.
+    """
     sql = (
         "SELECT date(ts,'unixepoch','localtime') AS dia, avg"
-        " FROM v_run WHERE avg IS NOT NULL"
+        " FROM v_run WHERE avg IS NOT NULL AND completa = 1"
     )
     parametros = []
     if desde_ts is not None:
@@ -80,9 +86,13 @@ def latencia_por_segmento(con):
                 "amostras": len(valores),
             })
 
+    # A barra "destino" só pode somar execuções que chegaram ao destino;
+    # latência de gateway já tem sua própria barra, a de `lan`.
     destino = [
         linha["best"]
-        for linha in con.execute("SELECT best FROM v_run WHERE best IS NOT NULL")
+        for linha in con.execute(
+            "SELECT best FROM v_run WHERE best IS NOT NULL AND completa = 1"
+        )
     ]
     if destino:
         resultado.append({
@@ -127,16 +137,23 @@ def comparacao_baseline(con, dias_janela=DIAS_JANELA_RECENTE):
     if fim is None:
         return None
 
+    # As duas janelas usam só traces completas, pelo mesmo motivo de
+    # latencia_diaria: caso contrário o delta compara latência de destino de um
+    # lado com latência de gateway do outro.
     corte = fim - dias_janela * SEGUNDOS_POR_DIA
     recentes = [
         linha["avg"]
         for linha in con.execute(
-            "SELECT avg FROM v_run WHERE ts >= ? AND avg IS NOT NULL", (corte,)
+            "SELECT avg FROM v_run"
+            " WHERE ts >= ? AND avg IS NOT NULL AND completa = 1",
+            (corte,),
         )
     ]
     historico = [
         linha["avg"]
-        for linha in con.execute("SELECT avg FROM v_run WHERE avg IS NOT NULL")
+        for linha in con.execute(
+            "SELECT avg FROM v_run WHERE avg IS NOT NULL AND completa = 1"
+        )
     ]
 
     def taxa_de_perda(contagem):
@@ -184,7 +201,17 @@ def desconhecidos_por_dia(con):
 
 
 def trocas_de_rota(con, limite=40):
-    """Quando o IP predominante de um hop mudou de um dia para o outro."""
+    """As `limite` trocas de rota mais recentes."""
+    return trocas_de_rota_com_total(con, limite)[0]
+
+
+def trocas_de_rota_com_total(con, limite=40):
+    """As `limite` trocas mais recentes e quantas existem ao todo.
+
+    O total acompanha a lista truncada para que quem exibe a tabela possa dizer
+    quantas linhas está mostrando de quantas existem, em vez de deixar o leitor
+    supor que a tabela é a lista inteira.
+    """
     consulta = """
         SELECT dia, hop, ip FROM (
             SELECT date(ts,'unixepoch','localtime') AS dia, hop, ip,
@@ -213,4 +240,4 @@ def trocas_de_rota(con, limite=40):
         anterior[hop] = linha["ip"]
     # Ordenar por data (descendente) com hop como desempate, depois truncar as mais recentes
     trocas_ordenadas = sorted(trocas, key=lambda t: (t["dia"], t["hop"]), reverse=True)
-    return trocas_ordenadas[:limite]
+    return trocas_ordenadas[:limite], len(trocas_ordenadas)

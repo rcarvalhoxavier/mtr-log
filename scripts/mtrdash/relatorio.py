@@ -40,6 +40,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .melhor { color: #0f766e; }
 .nota { background: #f1f5f9; border-left: 3px solid #94a3b8; padding: 12px 14px;
         border-radius: 0 6px 6px 0; font-size: 14px; color: #334155; margin-top: 18px; }
+.rodape-tabela { color: #64748b; font-size: 13px; margin: 8px 0 0; }
 .vazio { color: #64748b; font-style: italic; }
 footer { color: #64748b; font-size: 13px; text-align: center; }
 """
@@ -65,6 +66,22 @@ def _tabela(cabecalhos, linhas):
         for linha in linhas
     )
     return f"<table><thead><tr>{cabeca}</tr></thead><tbody>{corpo}</tbody></table>"
+
+
+def _rodape_tabela(mostrados, total, substantivo):
+    """Diz quantas linhas a tabela mostra de quantas existem.
+
+    Tanto `eventos_de_perda` quanto `trocas_de_rota` truncam em 40. Sem este
+    rótulo a tabela se passa pela lista completa — a nota do Painel 1 chegava a
+    afirmar que ela listava as 1205 execuções de perda real, sendo que tinha 40
+    linhas.
+    """
+    if not mostrados:
+        return ""
+    return (
+        f'<p class="rodape-tabela">Tabela: <strong>{mostrados}</strong> de '
+        f"<strong>{total}</strong> {escape(substantivo)}, as mais recentes.</p>"
+    )
 
 
 def _serie_de_latencia(serie):
@@ -97,20 +114,34 @@ def painel_culpado(con):
     ])
 
     contagem = consultas.contagem_de_classificacao(con)
+    eventos = consultas.eventos_de_perda(con)
     tabela = _tabela(
         ["quando", "perda no destino", "pacotes perdidos", "hops"],
         [
             (e["quando"], _numero(e["loss_destino"], 2, "%"), e["drops"], e["hops"])
-            for e in consultas.eventos_de_perda(con)
+            for e in eventos
         ],
     )
+    tabela += _rodape_tabela(
+        len(eventos), contagem.get("real", 0), "execuções de perda real"
+    )
 
+    # Artefato e incompleta são coisas diferentes e nenhuma das duas é
+    # degradação: a primeira é perda que não existiu, a segunda é uma medição
+    # que nem chegou a ser sobre o destino. As duas são contadas e explicadas,
+    # nunca somadas ao número de perda real.
     nota = (
-        f'<div class="nota"><strong>{contagem.get("artefato", 0)}</strong> execuções '
-        f"registraram perda em hop intermediário que não chegou ao destino. Isso é "
-        f"limitação de resposta a ICMP no roteador, não pacote perdido, e por isso não "
-        f"entra na tabela acima — que lista as "
-        f'<strong>{contagem.get("real", 0)}</strong> execuções de perda real.</div>'
+        '<div class="nota">'
+        f'<strong>{contagem.get("artefato", 0)}</strong> execuções '
+        "registraram perda em hop intermediário que não chegou ao destino. Isso é "
+        "limitação de resposta a ICMP no roteador, não pacote perdido, e por isso "
+        "não entra na tabela acima.<br>"
+        f'<strong>{contagem.get("incompleta", 0)}</strong> execuções '
+        "não chegaram ao alvo: o mtr parou antes do destino, então o que foi medido "
+        "é o caminho parcial e não a conexão até o destino. Elas também ficam fora "
+        "da tabela e fora dos gráficos de latência — a latência do roteador local "
+        "não é latência até o destino."
+        "</div>"
     )
 
     return f"""<section>
@@ -206,10 +237,12 @@ def painel_rota(con):
         unidade="",
     )
 
+    trocas, total_de_trocas = consultas.trocas_de_rota_com_total(con)
     tabela = _tabela(
         ["dia", "hop", "de", "para"],
-        [(t["dia"], t["hop"], t["de"], t["para"]) for t in consultas.trocas_de_rota(con)],
+        [(t["dia"], t["hop"], t["de"], t["para"]) for t in trocas],
     )
+    tabela += _rodape_tabela(len(trocas), total_de_trocas, "trocas de rota")
 
     return f"""<section>
 <h2>A rota está instável</h2>

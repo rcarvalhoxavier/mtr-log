@@ -60,24 +60,40 @@ FROM mtr_data m;
 
 -- v_run: uma linha por execução, com os dados do hop de destino.
 -- É a única fonte confiável de latência e perda reais (spec §2.3).
+--
+-- MAX(hop) é o último hop que respondeu, não necessariamente o alvo: em 753 das
+-- 65.341 execuções o mtr parou antes do 8.8.8.8 e o último hop é o roteador do
+-- próprio usuário. `completa` separa os dois casos.
+--
+-- A regra é positiva de propósito — completa é o que TERMINA em `transito` —
+-- para que qualquer segmento que não seja trânsito (lan, cgnat, desconhecido)
+-- já conte como incompleta sem precisar ser enumerado. Hoje nenhuma execução
+-- termina em `cgnat`; se um dia terminar, cai no lado certo sozinha.
 DROP VIEW IF EXISTS v_run;
 CREATE VIEW v_run AS
 SELECT
     m.ts, m.host, m.hop AS hops, m.ip AS dest_ip,
-    m.loss, m.drops, m.snt, m.last, m.avg, m.best, m.wrst, m.stdev
-FROM mtr_data m
+    m.loss, m.drops, m.snt, m.last, m.avg, m.best, m.wrst, m.stdev,
+    m.segmento AS segmento_destino,
+    CASE WHEN m.segmento = 'transito' THEN 1 ELSE 0 END AS completa
+FROM v_hop m
 JOIN (
     SELECT ts, host, MAX(hop) AS ultimo FROM mtr_data GROUP BY ts, host
 ) d ON d.ts = m.ts AND d.host = m.host AND d.ultimo = m.hop;
 
 -- v_loss: perda por execução, já separando degradação real de artefato de ICMP.
 -- Sem essa distinção, 17.646 execuções de perda inexistente poluem o resultado.
+--
+-- `incompleta` vem primeiro e tem precedência sobre as outras três: se a trace
+-- não chegou ao destino, não faz sentido perguntar se a perda propagou até ele.
+-- Eram 647 execuções truncadas contadas como perda `real`, 54% do total.
 DROP VIEW IF EXISTS v_loss;
 CREATE VIEW v_loss AS
 SELECT
     r.ts,
     r.host,
     r.hops,
+    r.completa,
     r.loss AS loss_destino,
     r.drops,
     COALESCE((
@@ -85,6 +101,7 @@ SELECT
         WHERE h.ts = r.ts AND h.host = r.host AND h.hop < r.hops
     ), 0) AS loss_intermediaria,
     CASE
+        WHEN r.completa = 0 THEN 'incompleta'
         WHEN r.loss > 0 THEN 'real'
         WHEN COALESCE((
             SELECT MAX(h.loss) FROM mtr_data h

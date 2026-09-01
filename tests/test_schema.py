@@ -125,6 +125,101 @@ class TestViewLoss(unittest.TestCase):
         )
 
 
+class TestTraceTruncada(unittest.TestCase):
+    """A trace só chegou ao alvo quando o último hop é `transito`.
+
+    Em 753 das 65.341 execuções reais o `mtr` parou antes do 8.8.8.8 e o último
+    hop é o roteador do próprio usuário. Sem essa distinção, `v_run` mede o
+    gateway e chama de latência até o destino — e 647 dessas execuções entravam
+    como perda `real`, 54% do total.
+    """
+
+    def test_trace_que_termina_no_transito_e_completa(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0, avg=1.0)
+        inserir_hop(con, 100, 2, "100.70.0.1", loss=0.0, avg=4.0)
+        inserir_hop(con, 100, 3, "dns.google", loss=0.0, avg=9.0)
+        self.assertEqual(
+            con.execute("SELECT segmento_destino, completa FROM v_run").fetchone(),
+            ("transito", 1),
+        )
+
+    def test_trace_que_termina_na_lan_e_incompleta(self):
+        """O caso real: 724 execuções cujo último hop é `_gateway`,
+        `192.168.0.1` ou `pfsense.home.arpa`."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=100.0, avg=1.24, best=1.10)
+        self.assertEqual(
+            con.execute("SELECT segmento_destino, completa FROM v_run").fetchone(),
+            ("lan", 0),
+        )
+
+    def test_trace_que_termina_em_desconhecido_e_incompleta(self):
+        """29 execuções reais terminam num hop sem resposta (ip NULL)."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0, avg=1.0)
+        inserir_hop(con, 100, 2, None, loss=100.0, avg=0.0)
+        self.assertEqual(
+            con.execute("SELECT segmento_destino, completa FROM v_run").fetchone(),
+            ("desconhecido", 0),
+        )
+
+    def test_trace_que_termina_em_cgnat_e_incompleta(self):
+        """Nenhuma execução termina em `cgnat` hoje, mas a regra é escrita pelo
+        que é `transito` justamente para que esse caso futuro já conte como
+        incompleta em vez de virar exceção esquecida."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0, avg=1.0)
+        inserir_hop(con, 100, 2, "100.70.0.1", loss=0.0, avg=4.0)
+        self.assertEqual(
+            con.execute("SELECT segmento_destino, completa FROM v_run").fetchone(),
+            ("cgnat", 0),
+        )
+
+
+class TestClassificacaoIncompleta(unittest.TestCase):
+    """`incompleta` tem precedência: se a trace não chegou ao destino, não faz
+    sentido perguntar se a perda propagou até ele."""
+
+    def test_perda_em_trace_truncada_e_incompleta_nao_real(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=100.0, avg=1.24)
+        self.assertEqual(
+            con.execute("SELECT classificacao FROM v_loss").fetchone()[0],
+            "incompleta",
+        )
+
+    def test_trace_truncada_sem_perda_tambem_e_incompleta(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0, avg=1.24)
+        inserir_hop(con, 100, 2, "192.168.0.1", loss=0.0, avg=1.5)
+        self.assertEqual(
+            con.execute("SELECT classificacao FROM v_loss").fetchone()[0],
+            "incompleta",
+        )
+
+    def test_trace_truncada_com_perda_intermediaria_nao_vira_artefato(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0, avg=1.0)
+        inserir_hop(con, 100, 2, None, loss=100.0, avg=0.0)
+        inserir_hop(con, 100, 3, "192.168.0.1", loss=0.0, avg=1.5)
+        self.assertEqual(
+            con.execute("SELECT classificacao FROM v_loss").fetchone()[0],
+            "incompleta",
+        )
+
+    def test_trace_completa_continua_classificada_pela_propagacao(self):
+        """A regra da §2.2 não muda para quem chegou ao destino."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway", loss=0.0)
+        inserir_hop(con, 100, 2, "100.70.0.1", loss=20.0)
+        inserir_hop(con, 100, 3, "dns.google", loss=0.0)
+        self.assertEqual(
+            con.execute("SELECT classificacao FROM v_loss").fetchone()[0],
+            "artefato",
+        )
+
+
 class TestChavePrimaria(unittest.TestCase):
     def test_reinsercao_do_mesmo_hop_e_ignorada(self):
         con = banco_em_memoria()

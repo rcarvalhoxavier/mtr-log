@@ -85,11 +85,111 @@ class TestGeracao(unittest.TestCase):
         Logo: 29 artefatos e 1 perda real. Conferido na nota do painel, não por
         substring solta, que passaria por acidente."""
         self.assertIn("<strong>29</strong> execuções", self.html)
-        self.assertIn("<strong>1</strong> execuções de perda real", self.html)
+        self.assertIn(
+            "<strong>1</strong> de <strong>1</strong> execuções de perda real",
+            self.html,
+        )
         self.assertIn("não chegou ao destino", self.html)
+        # Toda execução desta fixture termina em dns.google, então nenhuma é
+        # truncada — o caminho feliz que escondia o bug das traces incompletas.
+        self.assertIn("<strong>0</strong> execuções não chegaram ao alvo", self.html)
 
     def test_nao_vaza_a_interrogacao_do_mtr(self):
         self.assertNotIn("???", self.html)
+
+
+class TestNotaDoPainel1(unittest.TestCase):
+    """A nota é o único lugar do dashboard onde os números descartados são
+    explicados. Ela precisa contar as traces truncadas separadamente e dizer a
+    verdade sobre o tamanho da tabela ao lado."""
+
+    def _banco_com_incompletas(self):
+        linhas = []
+        # 3 execuções completas e limpas.
+        for n in range(3):
+            ts = BASE_TS + n * 3600
+            linhas += [
+                (ts, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+                (ts, 2, "dns.google", 0.0, 9.0, 8.0, 0),
+            ]
+        # 1 execução completa com perda que chegou ao destino: perda real.
+        ts = BASE_TS + 10 * 3600
+        linhas += [
+            (ts, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (ts, 2, "dns.google", 20.0, 9.0, 8.0, 2),
+        ]
+        # 5 execuções truncadas no gateway, com perda: nem real, nem artefato.
+        for n in range(5):
+            ts = BASE_TS + UM_DIA + n * 3600
+            linhas.append((ts, 1, "_gateway", 100.0, 1.24, 1.10, 10))
+        return banco_com(linhas)
+
+    def test_reporta_incompletas_separadamente_da_perda_real(self):
+        caminho = self._banco_com_incompletas()
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_culpado(con)
+            finally:
+                con.close()
+            self.assertIn("<strong>5</strong> execuções não chegaram ao alvo", html)
+            self.assertIn("caminho parcial", html)
+            # A perda real continua sendo só a execução que de fato chegou.
+            self.assertIn(
+                "<strong>1</strong> de <strong>1</strong> execuções de perda real",
+                html,
+            )
+        finally:
+            pathlib.Path(caminho).unlink()
+
+    def test_tabela_de_perda_diz_quantas_mostra_de_quantas_existem(self):
+        """A nota afirmava que a tabela listava as 1205 execuções de perda real.
+        A tabela tem 40 linhas: `eventos_de_perda` trunca em `limite=40`."""
+        linhas = []
+        for n in range(45):
+            ts = BASE_TS + n * 3600
+            linhas += [
+                (ts, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+                (ts, 2, "dns.google", 5.0, 9.0, 8.0, 1),
+            ]
+        caminho = banco_com(linhas)
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_culpado(con)
+            finally:
+                con.close()
+            self.assertIn(
+                "<strong>40</strong> de <strong>45</strong> execuções de perda real",
+                html,
+            )
+            # 1 linha de cabeçalho + 40 de dados, e nada de 45.
+            self.assertEqual(html.count("<tr>"), 41)
+        finally:
+            pathlib.Path(caminho).unlink()
+
+    def test_tabela_de_trocas_de_rota_diz_quantas_mostra(self):
+        """887 trocas no total, 40 exibidas, sem nenhum rótulo dizendo isso."""
+        linhas = []
+        for dia in range(45):
+            ts = BASE_TS + dia * UM_DIA
+            linhas += [
+                (ts, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+                (ts, 2, f"10.0.0.{dia}", 0.0, 4.0, 3.4, 0),
+                (ts, 3, "dns.google", 0.0, 9.0, 8.0, 0),
+            ]
+        caminho = banco_com(linhas)
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_rota(con)
+            finally:
+                con.close()
+            self.assertIn(
+                "<strong>40</strong> de <strong>44</strong> trocas de rota", html
+            )
+        finally:
+            pathlib.Path(caminho).unlink()
 
 
 class TestAlinhamentoDeEixo(unittest.TestCase):
@@ -157,16 +257,23 @@ class TestCartaoRecente(unittest.TestCase):
     def _banco_com_janelas(self, valor_recente, valor_historico):
         """3 execuções dentro da janela recente com latência constante
         `valor_recente`, e 20 execuções bem mais antigas com latência
-        constante `valor_historico`. Um único hop (destino direto), sem
-        perda, para que p50 de cada janela seja exatamente o valor
-        constante correspondente — sem depender do método de percentil."""
+        constante `valor_historico`. Sem perda, para que p50 de cada janela
+        seja exatamente o valor constante correspondente — sem depender do
+        método de percentil.
+
+        O gateway no hop 1 não é decoração: o hop 1 é `lan` por definição
+        (spec §3.2), então uma execução de um hop só nunca chega ao destino e
+        é descartada das séries de latência. A trace precisa terminar em
+        `transito` para valer como medição do destino."""
         linhas = []
         for k in range(3):
             ts = self.ULTIMO_TS - k * UM_DIA
-            linhas.append((ts, 1, "8.8.4.4", 0.0, valor_recente, valor_recente, 0))
+            linhas.append((ts, 1, "_gateway", 0.0, 1.0, 0.8, 0))
+            linhas.append((ts, 2, "8.8.4.4", 0.0, valor_recente, valor_recente, 0))
         for k in range(20):
             ts = self.ULTIMO_TS - (self.MARGEM_HISTORICO + k) * UM_DIA
-            linhas.append((ts, 1, "8.8.4.4", 0.0, valor_historico, valor_historico, 0))
+            linhas.append((ts, 1, "_gateway", 0.0, 1.0, 0.8, 0))
+            linhas.append((ts, 2, "8.8.4.4", 0.0, valor_historico, valor_historico, 0))
         return banco_com(linhas)
 
     def test_janela_recente_pior_mostra_valor_recente_e_classe_pior(self):

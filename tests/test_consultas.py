@@ -148,6 +148,66 @@ class TestClassificacaoDePerda(unittest.TestCase):
         con.close()
 
 
+class TestTraceTruncada(unittest.TestCase):
+    """Toda fixture desta suíte era caminho feliz terminando em `dns.google`,
+    e por isso nenhum teste percebia que uma trace que parou no gateway era
+    medida como se tivesse chegado ao 8.8.8.8. Em 2025-11-30 as 287 execuções
+    do dia foram truncadas em 1 hop e o painel plotava 1,24 ms — o dia da
+    queda total virava o dia mais rápido da série."""
+
+    def setUp(self):
+        linhas = []
+        # Dia 0: duas execuções completas, latência 10 ms no destino.
+        for n in (0, 1):
+            linhas += execucao(BASE_TS + n * 3600, [
+                (1, "_gateway", 0.0, 1.0, 0.8),
+                (2, "100.70.0.1", 0.0, 4.0, 3.4),
+                (3, "dns.google", 0.0, 10.0, 8.0),
+            ])
+        # Dia 1: a rede caiu. O mtr não passou do gateway e devolveu 1,24 ms
+        # com 100% de perda — perda do gateway, não da conexão até o destino.
+        linhas += execucao(BASE_TS + UM_DIA, [
+            (1, "_gateway", 100.0, 1.24, 1.10),
+        ])
+        self.caminho = construir_banco(linhas)
+        self.con = consultas.conectar(self.caminho)
+
+    def tearDown(self):
+        self.con.close()
+        pathlib.Path(self.caminho).unlink()
+
+    def test_classifica_como_incompleta(self):
+        contagem = consultas.contagem_de_classificacao(self.con)
+        self.assertEqual(contagem, {"sem_perda": 2, "incompleta": 1})
+
+    def test_nao_entra_em_eventos_de_perda(self):
+        """647 das 1.205 execuções de perda `real` do banco real eram isto."""
+        self.assertEqual(consultas.eventos_de_perda(self.con), [])
+
+    def test_nao_contribui_para_latencia_diaria(self):
+        """O dia todo truncado some da série em vez de plotar a latência do
+        gateway como se fosse a do destino."""
+        serie = consultas.latencia_diaria(self.con)
+        self.assertEqual([d["dia"] for d in serie], [serie[0]["dia"]])
+        self.assertEqual(len(serie), 1)
+        self.assertEqual(serie[0]["amostras"], 2)
+        self.assertEqual(serie[0]["p50"], 10.0)
+
+    def test_nao_contribui_para_latencia_do_destino_por_segmento(self):
+        por_segmento = {
+            d["segmento"]: d for d in consultas.latencia_por_segmento(self.con)
+        }
+        self.assertEqual(por_segmento["destino"]["amostras"], 2)
+        self.assertEqual(por_segmento["destino"]["p50"], 8.0)
+
+    def test_nao_contribui_para_a_comparacao_de_baseline(self):
+        comparacao = consultas.comparacao_baseline(self.con, dias_janela=7)
+        self.assertEqual(comparacao["baseline"]["amostras"], 2)
+        self.assertEqual(comparacao["baseline"]["p50"], 10.0)
+        self.assertEqual(comparacao["recente"]["amostras"], 2)
+        self.assertEqual(comparacao["recente"]["p50"], 10.0)
+
+
 class TestBaseline(unittest.TestCase):
     def test_compara_janela_recente_com_historico(self):
         linhas = []
