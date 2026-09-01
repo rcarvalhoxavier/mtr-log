@@ -30,6 +30,9 @@ th { color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercas
      letter-spacing: .04em; }
 .num { text-align: right; }
 td.num { font-variant-numeric: tabular-nums; }
+.frescor { color: #475569; font-size: 13px; margin: 0 0 14px; }
+.matriz { overflow-x: auto; }
+.matriz th, .matriz td { font-size: 12px; padding: 5px 8px; white-space: nowrap; }
 .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
            gap: 14px; margin-bottom: 8px; }
 .cartao { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; }
@@ -106,6 +109,84 @@ def _serie_de_latencia(serie):
             "pontos": [(d["dia"], d["p95"]) for d in serie],
         },
     ]
+
+
+def _celula_de_hop(detalhe):
+    """O que aparece numa célula da matriz, em linha única.
+
+    Linha única de propósito: `_tabela` escapa tudo que passa por ela, e um IP
+    reverso é dado controlado por terceiro. Quebrar a célula em várias linhas
+    exigiria abrir uma exceção no escape.
+    """
+    if detalhe is None:
+        return ""
+
+    # Hop que não respondeu: o mtr grava avg 0.0, que é ausência de medição e não
+    # latência zero. Exibir o número diria que o salto é instantâneo.
+    if detalhe["ip"] is None:
+        if detalhe["loss"] and detalhe["loss"] < 100:
+            return f"sem resposta · {detalhe['loss']:.0f}%"
+        return "sem resposta"
+
+    partes = [detalhe["ip"]]
+    if detalhe["avg"] is not None:
+        partes.append(f"{detalhe['avg']:.1f} ms")
+    if detalhe["loss"]:
+        partes.append(f"{detalhe['loss']:.0f}%")
+    return " · ".join(partes)
+
+
+def painel_agora(con, limite=consultas.EXECUCOES_RECENTES):
+    execucoes = consultas.ultimas_execucoes(con, limite)
+    if not execucoes:
+        return f"<section><h2>Últimas execuções</h2>{graficos.VAZIO}</section>"
+
+    gerado_em, minutos = con.execute(
+        "SELECT datetime('now','localtime'),"
+        " CAST((strftime('%s','now') - ?) / 60 AS INTEGER)",
+        (execucoes[0]["ts"],),
+    ).fetchone()
+
+    tira = _tabela(
+        ["quando", "hops", "chegou ao alvo", "latência", "perda", "situação"],
+        [
+            (
+                e["quando"],
+                e["hops"],
+                "sim" if e["completa"] else "não",
+                _numero(e["avg"], 2, " ms"),
+                _numero(e["loss"], 2, "%"),
+                e["classificacao"],
+            )
+            for e in execucoes
+        ],
+        colunas_numericas=(1, 3, 4),
+    )
+
+    # Eixo de hops comum a todas as execuções. Iterar os hops de cada execução
+    # separadamente deslocaria as células das traces curtas para cima, e a parede
+    # apareceria no hop errado.
+    maior = max(e["hops"] for e in execucoes)
+    por_execucao = [{h["hop"]: h for h in e["detalhe"]} for e in execucoes]
+    matriz = _tabela(
+        ["hop"] + [e["quando"].split()[1] for e in execucoes],
+        [
+            [hop] + [_celula_de_hop(hops.get(hop)) for hops in por_execucao]
+            for hop in range(1, maior + 1)
+        ],
+        colunas_numericas=(0,),
+    )
+
+    plural = "minuto" if minutos == 1 else "minutos"
+    return f"""<section>
+<h2>Últimas execuções</h2>
+<p class="pergunta">Acabei de notar uma interrupção — o que os últimos testes mostram?</p>
+<p class="frescor">Gerado em {escape(str(gerado_em))}. Última execução:
+{escape(execucoes[0]["quando"])}, {minutos} {plural} antes.</p>
+{tira}
+<h3>Cada hop, execução por execução</h3>
+<div class="matriz">{matriz}</div>
+</section>"""
 
 
 def painel_culpado(con):
@@ -270,7 +351,8 @@ def painel_rota(con):
 def gerar(caminho_db):
     con = consultas.conectar(caminho_db)
     try:
-        corpo = painel_culpado(con) + painel_baseline(con) + painel_rota(con)
+        corpo = (painel_agora(con) + painel_culpado(con)
+                 + painel_baseline(con) + painel_rota(con))
         primeiro, ultimo = con.execute(
             "SELECT datetime(MIN(ts),'unixepoch','localtime'),"
             " datetime(MAX(ts),'unixepoch','localtime') FROM v_run"

@@ -9,6 +9,10 @@ DIAS_SERIE_RECENTE = 30
 
 SEGUNDOS_POR_DIA = 86400
 
+# Quantas execuções a seção "Agora" detalha. Com coleta a cada 5 minutos, 5
+# execuções cobrem ~25 minutos — a janela de "está acontecendo agora".
+EXECUCOES_RECENTES = 5
+
 
 def conectar(caminho):
     """Conexão somente leitura: o dashboard nunca escreve no banco."""
@@ -176,6 +180,42 @@ def comparacao_baseline(con, dias_janela=DIAS_JANELA_RECENTE):
             "taxa_perda": taxa_de_perda(contagem_de_classificacao(con)),
         },
     }
+
+
+def ultimas_execucoes(con, limite=EXECUCOES_RECENTES):
+    """As execuções mais recentes, mais recente primeiro, com os hops de cada uma.
+
+    Cada item traz o resumo da execução e uma lista `detalhe` com um dicionário por
+    hop alcançado. O detalhe por hop é o ponto da consulta: sem ele não se distingue
+    uma queda do provedor de um roteador local sobrecarregado.
+    """
+    resumos = con.execute(
+        """
+        SELECT r.ts, datetime(r.ts,'unixepoch','localtime') AS quando,
+               r.hops, r.completa, r.loss, r.avg, l.classificacao
+        FROM v_run r
+        JOIN v_loss l ON l.ts = r.ts AND l.host = r.host
+        ORDER BY r.ts DESC
+        LIMIT ?
+        """,
+        (limite,),
+    ).fetchall()
+    if not resumos:
+        return []
+
+    marcadores = ",".join("?" * len(resumos))
+    detalhes = {}
+    for linha in con.execute(
+        "SELECT ts, hop, ip, loss, avg FROM mtr_data"
+        f" WHERE ts IN ({marcadores}) ORDER BY ts DESC, hop",
+        [r["ts"] for r in resumos],
+    ):
+        detalhes.setdefault(linha["ts"], []).append(dict(linha))
+
+    return [
+        {**dict(resumo), "detalhe": detalhes.get(resumo["ts"], [])}
+        for resumo in resumos
+    ]
 
 
 def ips_por_hop_por_dia(con):

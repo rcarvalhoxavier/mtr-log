@@ -322,6 +322,120 @@ class TestCartaoRecente(unittest.TestCase):
             pathlib.Path(caminho).unlink()
 
 
+def matriz_de_hops(html):
+    """Linhas da matriz hop x execução, como listas de texto de célula."""
+    bloco = html[html.index('class="matriz"'):]
+    corpo = re.search(r"<tbody>(.*?)</tbody>", bloco, re.S).group(1)
+    return [
+        [re.sub(r"<[^>]+>", "", c) for c in re.findall(r"<td[^>]*>.*?</td>", tr, re.S)]
+        for tr in re.findall(r"<tr>(.*?)</tr>", corpo, re.S)
+    ]
+
+
+class TestPainelAgora(unittest.TestCase):
+    """A seção "Agora": as últimas execuções, para diagnosticar uma interrupção."""
+
+    def _banco(self):
+        linhas = [
+            # Mais antiga: chegou ao destino, três hops.
+            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (BASE_TS, 2, "100.70.0.1", 0.0, 4.0, 3.4, 0),
+            (BASE_TS, 3, "dns.google", 0.0, 9.0, 8.0, 0),
+            # Mais recente: morreu no gateway, como na queda real de nov/2025.
+            (BASE_TS + 300, 1, "_gateway", 90.0, 0.93, 0.9, 9),
+        ]
+        return banco_com(linhas)
+
+    def _painel(self):
+        caminho = self._banco()
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                return relatorio.painel_agora(con)
+            finally:
+                con.close()
+        finally:
+            pathlib.Path(caminho).unlink()
+
+    def test_uma_linha_por_execucao_na_tira_de_status(self):
+        html = self._painel()
+        tira = html[html.index("Últimas execuções"):html.index('class="matriz"')]
+        self.assertEqual(len(re.findall(r"<tr>", re.search(r"<tbody>(.*?)</tbody>", tira, re.S).group(1))), 2)
+
+    def test_matriz_mostra_a_parede_onde_a_trace_parou(self):
+        """O eixo de hops é comum às execuções. Uma trace que parou no hop 1 deixa
+        as células dos hops 2 e 3 vazias, e é essa parede que mostra onde quebrou."""
+        linhas = matriz_de_hops(self._painel())
+        self.assertEqual([l[0] for l in linhas], ["1", "2", "3"])
+        # Coluna 1 é a execução mais recente (truncada); coluna 2 é a antiga.
+        self.assertNotEqual(linhas[0][1], "")
+        self.assertEqual(linhas[1][1], "")
+        self.assertEqual(linhas[2][1], "")
+        self.assertNotEqual(linhas[1][2], "")
+        self.assertNotEqual(linhas[2][2], "")
+
+    def test_celula_traz_ip_latencia_e_perda_quando_ha_perda(self):
+        linhas = matriz_de_hops(self._painel())
+        recente_hop1 = linhas[0][1]
+        self.assertIn("_gateway", recente_hop1)
+        self.assertIn("0.9 ms", recente_hop1)
+        self.assertIn("90%", recente_hop1)
+
+    def test_celula_omite_perda_quando_nao_ha(self):
+        linhas = matriz_de_hops(self._painel())
+        antiga_hop3 = linhas[2][2]
+        self.assertIn("dns.google", antiga_hop3)
+        self.assertNotIn("%", antiga_hop3)
+
+    def test_hop_sem_resposta_nao_exibe_latencia(self):
+        """O mtr grava avg 0.0 para um hop que não respondeu. Isso é ausência de
+        medição, não latência zero — exibir como número diria que aquele salto é
+        instantâneo, que é o oposto da verdade."""
+        caminho = banco_com([
+            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (BASE_TS, 2, None, 100.0, 0.0, 0.0, 10),
+            (BASE_TS, 3, "dns.google", 0.0, 9.0, 8.0, 0),
+        ])
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                linhas = matriz_de_hops(relatorio.painel_agora(con))
+            finally:
+                con.close()
+        finally:
+            pathlib.Path(caminho).unlink()
+        celula = linhas[1][1]
+        self.assertIn("sem resposta", celula)
+        self.assertNotIn("ms", celula)
+        self.assertNotIn("0.0", celula)
+
+    def test_linha_de_frescor_data_a_geracao_nao_um_agora_vivo(self):
+        """O arquivo é estático. Dizer "há 4 minutos" sem ancorar na geração vira
+        mentira no dia seguinte."""
+        html = self._painel()
+        self.assertIn("Gerado em", html)
+        self.assertIn("antes", html)
+
+    def test_secao_agora_vem_antes_dos_paineis_historicos(self):
+        caminho = self._banco()
+        try:
+            html = relatorio.gerar(caminho)
+        finally:
+            pathlib.Path(caminho).unlink()
+        self.assertLess(html.index("Últimas execuções"), html.index("De quem é a culpa"))
+
+    def test_banco_vazio_nao_quebra(self):
+        caminho = banco_com([])
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                self.assertIn("Sem dados", relatorio.painel_agora(con))
+            finally:
+                con.close()
+        finally:
+            pathlib.Path(caminho).unlink()
+
+
 class TestAlinhamentoDeTabela(unittest.TestCase):
     """Cabeçalho e células de uma coluna numérica têm que concordar no alinhamento.
 

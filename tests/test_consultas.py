@@ -237,6 +237,70 @@ class TestBaseline(unittest.TestCase):
         con.close()
 
 
+class TestUltimasExecucoes(unittest.TestCase):
+    """A seção "Agora": as execuções mais recentes com o detalhe de cada hop.
+
+    O valor da seção é o detalhe por hop — é ele que distingue "a rede caiu" de
+    "o seu roteador está a 265 ms perdendo pacote".
+    """
+
+    def _banco(self):
+        linhas = []
+        # Três execuções completas, de 5 em 5 minutos.
+        for n in range(3):
+            linhas += execucao(BASE_TS + n * 300, [
+                (1, "_gateway", 0.0, 1.0, 0.8),
+                (2, "100.70.0.1", 0.0, 4.0, 3.4),
+                (3, "dns.google", 0.0, 9.0 + n, 8.0),
+            ])
+        # A mais recente é truncada: morreu no gateway, como na queda real.
+        linhas += execucao(BASE_TS + 900, [(1, "_gateway", 90.0, 0.93, 0.9)])
+        return construir_banco(linhas)
+
+    def test_devolve_a_mais_recente_primeiro(self):
+        con = consultas.conectar(self._banco())
+        try:
+            execucoes = consultas.ultimas_execucoes(con, limite=4)
+            self.assertEqual([e["ts"] for e in execucoes],
+                             [BASE_TS + 900, BASE_TS + 600, BASE_TS + 300, BASE_TS])
+        finally:
+            con.close()
+
+    def test_respeita_o_limite(self):
+        con = consultas.conectar(self._banco())
+        try:
+            self.assertEqual(len(consultas.ultimas_execucoes(con, limite=2)), 2)
+        finally:
+            con.close()
+
+    def test_cada_execucao_traz_seus_hops_em_ordem(self):
+        con = consultas.conectar(self._banco())
+        try:
+            completa = consultas.ultimas_execucoes(con, limite=4)[1]
+            self.assertEqual([h["hop"] for h in completa["detalhe"]], [1, 2, 3])
+            self.assertEqual([h["ip"] for h in completa["detalhe"]],
+                             ["_gateway", "100.70.0.1", "dns.google"])
+        finally:
+            con.close()
+
+    def test_trace_truncada_traz_menos_hops_e_vem_marcada(self):
+        con = consultas.conectar(self._banco())
+        try:
+            recente = consultas.ultimas_execucoes(con, limite=1)[0]
+            self.assertEqual(len(recente["detalhe"]), 1)
+            self.assertEqual(recente["completa"], 0)
+            self.assertEqual(recente["classificacao"], "incompleta")
+        finally:
+            con.close()
+
+    def test_banco_vazio(self):
+        con = consultas.conectar(construir_banco([]))
+        try:
+            self.assertEqual(consultas.ultimas_execucoes(con), [])
+        finally:
+            con.close()
+
+
 class TestRota(unittest.TestCase):
     def test_detecta_troca_de_ip_no_hop(self):
         linhas = []
