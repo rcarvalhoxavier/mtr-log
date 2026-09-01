@@ -174,8 +174,11 @@ class TestNotaDoPainel1(unittest.TestCase):
                 "<strong>40</strong> de <strong>45</strong> execuções de perda real",
                 html,
             )
-            # 1 linha de cabeçalho + 40 de dados, e nada de 45.
-            self.assertEqual(html.count("<tr>"), 41)
+            # Escopado à tabela de perda: contar <tr> no painel inteiro fazia este
+            # teste quebrar quando qualquer outra tabela era acrescentada ao painel.
+            tabela = html[html.index("Eventos de perda real"):]
+            corpo = re.search(r"<tbody>(.*?)</tbody>", tabela, re.S).group(1)
+            self.assertEqual(len(re.findall(r"<tr>", corpo)), 40)
         finally:
             pathlib.Path(caminho).unlink()
 
@@ -347,6 +350,21 @@ def legenda_de_situacao(html):
     ]
 
 
+def legenda_de_segmento(html):
+    """Pares (segmento, descrição) da legenda do gráfico de barras, e só dela.
+
+    Escopar de novo: `lan`, `cgnat`, `transito` e `destino` também aparecem como
+    rótulos do eixo X do SVG no mesmo painel, então procurar no HTML inteiro passa
+    mesmo com a legenda removida.
+    """
+    bloco = html[html.index("O que é cada segmento"):html.index("Eventos de perda real")]
+    corpo = re.search(r"<tbody>(.*?)</tbody>", bloco, re.S).group(1)
+    return [
+        tuple(re.sub(r"<[^>]+>", "", c) for c in re.findall(r"<td[^>]*>.*?</td>", tr, re.S))
+        for tr in re.findall(r"<tr>(.*?)</tr>", corpo, re.S)
+    ]
+
+
 class TestPainelAgora(unittest.TestCase):
     """A seção "Agora": as últimas execuções, para diagnosticar uma interrupção."""
 
@@ -467,6 +485,56 @@ class TestPainelAgora(unittest.TestCase):
                 con.close()
         finally:
             pathlib.Path(caminho).unlink()
+
+
+class TestLegendaDeSegmento(unittest.TestCase):
+    """A legenda do gráfico "Latência mínima por segmento do caminho"."""
+
+    def _painel(self):
+        caminho = banco_com([
+            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (BASE_TS, 2, "100.70.0.1", 0.0, 4.0, 3.4, 0),
+            (BASE_TS, 3, "dns.google", 30.0, 9.0, 8.0, 3),
+        ])
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                return relatorio.painel_culpado(con)
+            finally:
+                con.close()
+        finally:
+            pathlib.Path(caminho).unlink()
+
+    def test_define_as_quatro_barras_na_ordem_do_grafico(self):
+        pares = legenda_de_segmento(self._painel())
+        self.assertEqual(
+            [rotulo for rotulo, _ in pares],
+            ["lan", "cgnat", "transito", "destino"],
+        )
+
+    def test_revela_que_destino_esta_contado_dentro_de_transito(self):
+        """As duas barras não são disjuntas: o hop de destino é sempre classificado
+        como transito. Sem dizer isso, quem compara as barras conclui errado."""
+        descricoes = dict(legenda_de_segmento(self._painel()))
+        self.assertIn("transito", descricoes["destino"])
+
+    def test_explica_a_faixa_de_cgnat(self):
+        descricoes = dict(legenda_de_segmento(self._painel()))
+        self.assertIn("100.64.0.0/10", descricoes["cgnat"])
+
+    def test_vem_depois_do_grafico_e_antes_da_tabela_de_perda(self):
+        html = self._painel()
+        self.assertLess(html.index("Latência mínima por segmento"),
+                        html.index("O que é cada segmento"))
+        self.assertLess(html.index("O que é cada segmento"),
+                        html.index("Eventos de perda real"))
+
+    def test_nota_justifica_o_uso_da_latencia_minima(self):
+        html = self._painel()
+        inicio = html.index("O que é cada segmento")
+        trecho = html[inicio:html.index("Eventos de perda real")]
+        self.assertIn("ICMP", trecho)
+        self.assertIn("mínima", trecho)
 
 
 class TestAlinhamentoDeTabela(unittest.TestCase):

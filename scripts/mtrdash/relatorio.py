@@ -54,6 +54,37 @@ footer { color: #64748b; font-size: 13px; text-align: center; }
 # A tabela é exibida junto da tira de status porque quem abre o dashboard no meio de
 # uma interrupção lê a palavra sem ter contexto para ela — e a diferença entre
 # `artefato` e `real` é justamente o que decide se há motivo para preocupação.
+# Os quatro rótulos do gráfico de barras "Latência mínima por segmento do caminho".
+# `destino` não é um segmento do caminho como os outros três: é o último hop da
+# execução, e ele é sempre classificado como `transito`. A legenda diz isso porque a
+# leitura natural de quatro barras lado a lado é que elas são disjuntas — e não são.
+SEGMENTOS = (
+    (
+        "lan",
+        "Sua rede local: o primeiro salto, mais qualquer endereço privado "
+        "(10.x, 172.16–31.x, 192.168.x) ou nome local como _gateway e "
+        "pfsense.home.arpa. A latência aqui é do seu roteador e do enlace até ele.",
+    ),
+    (
+        "cgnat",
+        "A borda do provedor, na faixa 100.64.0.0/10 reservada para CGNAT — o "
+        "compartilhamento de um mesmo IP público entre vários assinantes. É o "
+        "primeiro salto que já não é seu.",
+    ),
+    (
+        "transito",
+        "O resto do caminho: endereços públicos entre a saída do provedor e o alvo, "
+        "incluindo as redes de trânsito e a rede do próprio destino.",
+    ),
+    (
+        "destino",
+        "Não é um segmento, é o último hop da execução — o alvo do teste. Ele "
+        "também está contado em transito, então as duas barras não são "
+        "independentes.",
+    ),
+)
+
+
 SITUACOES = (
     ("sem_perda", "Nenhuma perda em nenhum hop do caminho."),
     ("real", "A perda chegou ao hop de destino: a conexão perdeu pacote de verdade."),
@@ -265,6 +296,12 @@ def painel_culpado(con):
 {grafico_latencia}
 <h3>Latência mínima por segmento do caminho</h3>
 {barras}
+<h3>O que é cada segmento</h3>
+{_tabela(["segmento", "o que é"], SEGMENTOS)}
+<p class="rodape-tabela">A barra usa a latência <strong>mínima</strong> de cada
+segmento, não a média: roteadores intermediários despriorizam as próprias respostas
+ICMP, e o mínimo é bem menos poluído por esse efeito. Hops que não responderam ficam
+de fora — o zero que o mtr grava para eles é ausência de medição, não velocidade.</p>
 <h3>Eventos de perda real</h3>
 {tabela}
 {nota}
