@@ -11,9 +11,10 @@ This repository contains a Shell script that **monitors** a host’s connectivit
 3. [Installation](#installation)
 4. [Usage](#usage)
 5. [Viewing Data in SQLite](#viewing-data-in-sqlite)
-6. [Scheduling with Crontab](#scheduling-with-crontab)
-7. [Customizations](#customizations)
-8. [License](#license)
+6. [Dashboard](#dashboard)
+7. [Scheduling with Crontab](#scheduling-with-crontab)
+8. [Customizations](#customizations)
+9. [License](#license)
 
 ---
 
@@ -98,11 +99,12 @@ Typical columns you may see in MTR CSV outputs:
 5. **Hop** – The hop number in the route (starting from 1).
 6. **Loss%** – Percentage of packet loss.
 7. **Snt** – Number of packets sent.
-8. **Last** – Latency of the last packet (ms).
-9. **Avg** – Average latency (ms).
-10. **Best** – Lowest (best) latency observed (ms).
-11. **Wrst** – Highest (worst) latency observed (ms).
-12. **StDev** – Standard deviation of the latency (ms).
+8. **Drops** – Count of dropped packets. In the raw MTR CSV this column has **no header text** (a blank field between `Snt` and `Last`); older versions of this README did not document it at all. In the typed `mtr_data` table (see `scripts/schema.sql`) it is stored as the `drops` column.
+9. **Last** – Latency of the last packet (ms).
+10. **Avg** – Average latency (ms).
+11. **Best** – Lowest (best) latency observed (ms).
+12. **Wrst** – Highest (worst) latency observed (ms).
+13. **StDev** – Standard deviation of the latency (ms).
 
 If your version of MTR produces additional columns (e.g., `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), make sure to update the **CREATE TABLE** statement in `monitor.sh` to match your actual CSV format.
 
@@ -120,6 +122,34 @@ SELECT * FROM mtr_data LIMIT 10;
 ```
 
 This displays the first 10 rows. You can also use tools like [DB Browser for SQLite](https://sqlitebrowser.org/) for a more user-friendly interface.
+
+---
+
+## Dashboard
+
+Generate a static HTML report from the collected data with:
+
+```bash
+python3 scripts/dashboard.py
+```
+
+This writes `dashboard.html` in the repository root. It has no dependencies beyond the Python 3.12 standard library — no packages to install, and no external assets: the file is self-contained (no `http`/`https` references, no `<script>`, no `@import`) and can be opened directly in a browser or shared as-is.
+
+The report has three panels, each answering one question:
+
+1. **De quem é a culpa (Who's to blame)** – Does the degradation originate on my own network or outside it?
+2. **Está pior que o normal (Is it worse than usual)** – Is the recent time window worse than the historical baseline?
+3. **A rota está instável (Is the route unstable)** – Is the path to the destination changing or breaking?
+
+**A note on packet loss:** loss reported at an intermediate hop that does **not** propagate to the destination hop is an ICMP artifact — many routers deprioritize or rate-limit their own ICMP TTL-exceeded replies, which shows up as "loss" at that hop without any real impact on connectivity. The dashboard (and the underlying `v_loss` view) reports this explicitly as an **artifact**, separate from **real** loss (where the destination hop itself shows loss). Only real loss is counted as degradation.
+
+**Migrating databases created before this version:** `mtr_data.db` files created before the typed schema was introduced use an all-`TEXT` legacy layout. Bring them up to date with:
+
+```bash
+bash scripts/migrate.sh
+```
+
+The script is idempotent (running it again on an already-migrated database is a no-op) and always makes a timestamped backup (`mtr_data.db.bak-YYYYMMDD_HHMMSS`) before touching anything.
 
 ---
 

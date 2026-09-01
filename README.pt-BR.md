@@ -11,9 +11,10 @@ Este repositório contém um script em Shell que **monitora** a conectividade de
 3. [Instalação](#instalação)
 4. [Uso](#uso)
 5. [Importando Dados no SQLite](#importando-dados-no-sqlite)
-6. [Agendamento com Crontab](#agendamento-com-crontab)
-7. [Customizações](#customizações)
-8. [Licença](#licença)
+6. [Dashboard](#dashboard)
+7. [Agendamento com Crontab](#agendamento-com-crontab)
+8. [Customizações](#customizações)
+9. [Licença](#licença)
 
 ---
 
@@ -98,11 +99,12 @@ Algumas colunas típicas que podem aparecer no CSV do MTR são:
 5. **Hop:** – Número do salto (hop) na rota até o destino. Inicia em 1, 2, etc. Exemplo de valor: 1 (gateway local).
 6. **Loss%** – Porcentagem de pacotes perdidos.
 7. **Snt** – Número de pacotes enviados.
-8. **Last** – Latência do último pacote (ms).
-9. **Avg** – Latência média (ms).
-10. **Best** – Melhor (menor) latência (ms).
-11. **Wrst** – Pior (maior) latência (ms).
-12. **StDev** – Desvio padrão (ms).
+8. **Drops** – Contador de pacotes perdidos. No CSV bruto do MTR essa coluna **não tem nome no cabeçalho** (um campo em branco entre `Snt` e `Last`); versões anteriores deste README nem chegavam a documentá-la. Na tabela tipada `mtr_data` (ver `scripts/schema.sql`) ela é armazenada como a coluna `drops`.
+9. **Last** – Latência do último pacote (ms).
+10. **Avg** – Latência média (ms).
+11. **Best** – Melhor (menor) latência (ms).
+12. **Wrst** – Pior (maior) latência (ms).
+13. **StDev** – Desvio padrão (ms).
 
 Se o seu MTR gerar colunas adicionais (por exemplo `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), ajuste o **CREATE TABLE** em `monitor.sh` conforme necessário.
 
@@ -120,6 +122,34 @@ SELECT * FROM mtr_data LIMIT 10;
 ```
 
 Isso listará as 10 primeiras entradas. Você também pode usar ferramentas como [DB Browser for SQLite](https://sqlitebrowser.org/) para visualização mais amigável.
+
+---
+
+## Dashboard
+
+Gere um relatório estático em HTML a partir dos dados coletados com:
+
+```bash
+python3 scripts/dashboard.py
+```
+
+Isso grava `dashboard.html` na raiz do repositório. Não há dependências além da biblioteca padrão do Python 3.12 — nenhum pacote para instalar, e nenhum recurso externo: o arquivo é autocontido (sem referências `http`/`https`, sem `<script>`, sem `@import`) e pode ser aberto diretamente no navegador ou compartilhado como está.
+
+O relatório tem três painéis, cada um respondendo a uma pergunta:
+
+1. **De quem é a culpa** – A degradação nasce na minha rede ou fora dela?
+2. **Está pior que o normal** – O período recente está pior que a linha de base histórica?
+3. **A rota está instável** – O caminho até o destino está mudando ou quebrando?
+
+**Uma nota sobre perda de pacotes:** perda registrada num hop intermediário que **não** se propaga até o hop de destino é um artefato de ICMP — muitos roteadores despriorizam ou limitam suas próprias respostas ICMP de TTL excedido, o que aparece como "perda" naquele hop sem nenhum impacto real na conectividade. O dashboard (e a view `v_loss` por trás dele) reporta isso explicitamente como **artefato**, separado da perda **real** (quando o próprio hop de destino apresenta perda). Só a perda real é contabilizada como degradação.
+
+**Migrando bancos criados antes desta versão:** arquivos `mtr_data.db` criados antes da introdução do schema tipado usam um layout legado com todas as colunas em `TEXT`. Atualize-os com:
+
+```bash
+bash scripts/migrate.sh
+```
+
+O script é idempotente (rodá-lo novamente num banco já migrado não faz nada) e sempre cria um backup com timestamp (`mtr_data.db.bak-YYYYMMDD_HHMMSS`) antes de alterar qualquer coisa.
 
 ---
 

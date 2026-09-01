@@ -1,3 +1,5 @@
 .~lock.*
 *.db
 *.csv
+dashboard.html
+*.db.bak-*
