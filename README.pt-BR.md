@@ -158,8 +158,18 @@ Os códigos de saída importam para quem chama o script de dentro de outro:
 | Código | Significado |
 |---|---|
 | `0` | Migração concluída, ou banco já migrado (no-op). |
-| `1` | Nada foi alterado: banco ou arquivo de schema não encontrado, ou a contagem de linhas da origem e do destino divergiu. No caso da divergência, tanto a tabela `mtr_legacy` quanto o backup são preservados. |
+| `1` | Nada foi alterado: banco ou arquivo de schema não encontrado, ou a contagem de linhas da origem e do destino divergiu. No caso da divergência, tanto a tabela `mtr_legacy` quanto o backup são preservados, e a mensagem diz quantas linhas não puderam ser levadas e como inspecioná-las. |
 | `2` | **O banco ficou meio-migrado.** Foi encontrada uma tabela `mtr_legacy` remanescente de uma execução abortada, então esta execução se recusou a tocar em qualquer coisa. Resolva à mão — restaure o backup, ou remova `mtr_legacy` se `mtr_data` já estiver correta — antes de rodar de novo. |
+
+A divergência acontece quando linhas da tabela legada não cabem no schema tipado: `ts`, `host` e `hop` são `NOT NULL`, então uma linha com qualquer um deles vazio é descartada pelo `INSERT OR IGNORE` sem aviso. O script conta essas linhas e se recusa a concluir, em vez de descartá-las em silêncio.
+
+Para ver o que seria perdido, rode a query que a mensagem de erro imprime. Para prosseguir mesmo assim, aceitando a perda:
+
+```bash
+bash scripts/migrate.sh --aceitar-perda
+```
+
+A mesma opção também retoma uma migração que abortou antes, em que `mtr_legacy` e a tabela tipada coexistem — a promoção é idempotente, então ela preenche o que faltou e conclui.
 
 ---
 

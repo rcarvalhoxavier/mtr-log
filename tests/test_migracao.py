@@ -44,11 +44,27 @@ class TestMigracao(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def migrar(self):
+    def migrar(self, *extras):
         return subprocess.run(
-            ["bash", str(MIGRATE), str(self.db)],
+            ["bash", str(MIGRATE), str(self.db), *extras],
             capture_output=True, text=True,
         )
+
+    def inserir_sem_chave(self):
+        """Linhas que o schema tipado não aceita: ts, host e hop são NOT NULL, e o
+        INSERT OR IGNORE descarta a violação sem avisar."""
+        con = sqlite3.connect(self.db)
+        con.executemany(
+            "INSERT INTO mtr_data VALUES (" + ",".join("?" * 14) + ")",
+            [
+                ("MTR.0.95", "1785261100", "OK", None, "1", "_gateway",
+                 "0.0", "10", "0", "0.8", "1.0", "0.8", "1.3", "0.16"),
+                ("MTR.0.95", None, "OK", "8.8.8.8", "1", "_gateway",
+                 "0.0", "10", "0", "0.8", "1.0", "0.8", "1.3", "0.16"),
+            ],
+        )
+        con.commit()
+        con.close()
 
     def consultar(self, sql):
         con = sqlite3.connect(self.db)
@@ -116,6 +132,49 @@ class TestMigracao(unittest.TestCase):
         self.assertEqual(
             self.consultar("SELECT COUNT(*) FROM v_run")[0][0], 1
         )
+
+    def test_aborto_explica_a_causa_e_o_caminho_de_saida(self):
+        """A mensagem antiga só dizia que os números divergiam. Sem dizer por quê nem
+        como inspecionar, quem migra fica sem ação possível."""
+        self.inserir_sem_chave()
+        resultado = self.migrar()
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("2 linhas têm Start_Time, Host ou Hop nulos", resultado.stderr)
+        self.assertIn("--aceitar-perda", resultado.stderr)
+        self.assertIn("SELECT Start_Time, Host, Hop", resultado.stderr)
+
+    def test_aceitar_perda_conclui_apesar_da_divergencia(self):
+        self.inserir_sem_chave()
+        resultado = self.migrar("--aceitar-perda")
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertIn("2 linhas descartadas", resultado.stdout)
+        # As 4 boas entraram; mtr_legacy saiu.
+        self.assertEqual(self.consultar("SELECT COUNT(*) FROM mtr_data")[0][0], 4)
+        self.assertNotIn("mtr_legacy", {
+            n for (n,) in self.consultar(
+                "SELECT name FROM sqlite_master WHERE type='table'")})
+
+    def test_aceitar_perda_retoma_migracao_abortada(self):
+        """O estado em que o banco fica depois de um aborto: mtr_legacy e a tabela
+        tipada convivem. Sem a flag o script recusa; com ela, retoma."""
+        self.inserir_sem_chave()
+        self.assertEqual(self.migrar().returncode, 1)
+        self.assertIn("mtr_legacy", {
+            n for (n,) in self.consultar(
+                "SELECT name FROM sqlite_master WHERE type='table'")})
+
+        resultado = self.migrar("--aceitar-perda")
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertIn("retomando a migração", resultado.stdout)
+        self.assertEqual(self.consultar("SELECT COUNT(*) FROM mtr_data")[0][0], 4)
+        self.assertEqual(self.consultar("SELECT COUNT(*) FROM v_run")[0][0], 1)
+
+    def test_sem_a_flag_o_estado_inconsistente_segue_recusado(self):
+        self.inserir_sem_chave()
+        self.migrar()
+        resultado = self.migrar()
+        self.assertEqual(resultado.returncode, 2)
+        self.assertIn("estado inconsistente", resultado.stderr)
 
     def test_e_idempotente(self):
         self.assertEqual(self.migrar().returncode, 0)

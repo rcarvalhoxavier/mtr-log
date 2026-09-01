@@ -158,8 +158,18 @@ Exit codes are worth checking when calling it from a script:
 | Code | Meaning |
 |---|---|
 | `0` | Migration completed, or the database was already migrated (no-op). |
-| `1` | Nothing was changed: database or schema file not found, or the row counts of source and destination diverged. In the divergence case the `mtr_legacy` table and the backup are both preserved. |
+| `1` | Nothing was changed: database or schema file not found, or the row counts of source and destination diverged. In the divergence case the `mtr_legacy` table and the backup are both preserved, and the message names how many rows could not be carried over and how to inspect them. |
 | `2` | **The database is half-migrated.** An `mtr_legacy` table left over from a previously aborted run was found, so this run refused to touch anything. Resolve it by hand — restore the backup, or drop `mtr_legacy` if `mtr_data` is already correct — before running again. |
+
+Divergence happens when rows in the legacy table cannot be carried over: `ts`, `host` and `hop` are `NOT NULL` in the typed schema, so a row with any of them empty is dropped by `INSERT OR IGNORE` without a word. The script counts those and refuses to finish rather than discarding them quietly.
+
+To inspect what would be lost, run the query the error message prints. To proceed anyway, accepting the loss:
+
+```bash
+bash scripts/migrate.sh --aceitar-perda
+```
+
+The same flag also resumes a migration that aborted earlier, where `mtr_legacy` and the typed table coexist — the promotion is idempotent, so it fills in whatever is missing and finishes.
 
 ---
 
