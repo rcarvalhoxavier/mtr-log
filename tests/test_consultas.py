@@ -123,6 +123,30 @@ class TestClassificacaoDePerda(unittest.TestCase):
         self.assertEqual(eventos[0]["loss_destino"], 20.0)
         con.close()
 
+    def test_classifica_com_filtro_de_tempo(self):
+        """Verifica que desde_ts filtra corretamente as execuções antigas."""
+        linhas = []
+        # Dia 0: sem perda (não será incluída após o corte)
+        linhas += execucao(BASE_TS, [(1, "_gateway", 0.0, 1.0, 0.8),
+                                     (2, "100.70.0.1", 0.0, 4.0, 3.4),
+                                     (3, "dns.google", 0.0, 9.0, 8.0)])
+        # Dia 3: perda real (será incluída após o corte)
+        linhas += execucao(BASE_TS + 3 * UM_DIA, [(1, "_gateway", 0.0, 1.0, 0.8),
+                                                   (2, "100.70.0.1", 0.0, 4.0, 3.4),
+                                                   (3, "dns.google", 15.0, 9.0, 8.0)])
+        con = consultas.conectar(construir_banco(linhas))
+
+        # Sem filtro: ambas as execuções
+        total = consultas.contagem_de_classificacao(con)
+        self.assertEqual(total, {"sem_perda": 1, "real": 1})
+
+        # Com filtro a partir do dia 2: apenas a de dia 3
+        corte = BASE_TS + 2 * UM_DIA
+        recente = consultas.contagem_de_classificacao(con, desde_ts=corte)
+        self.assertEqual(recente, {"real": 1})
+
+        con.close()
+
 
 class TestBaseline(unittest.TestCase):
     def test_compara_janela_recente_com_historico(self):
@@ -142,6 +166,9 @@ class TestBaseline(unittest.TestCase):
         self.assertEqual(resultado["recente"]["amostras"], 3)
         self.assertEqual(resultado["baseline"]["p50"], 10.0)
         self.assertEqual(resultado["baseline"]["amostras"], 23)
+        # Verificar que taxa_perda está presente em ambas (sem perda neste cenário)
+        self.assertIsNotNone(resultado["recente"]["taxa_perda"])
+        self.assertIsNotNone(resultado["baseline"]["taxa_perda"])
         con.close()
 
     def test_banco_vazio_devolve_none(self):
@@ -163,6 +190,38 @@ class TestRota(unittest.TestCase):
         self.assertEqual(trocas[0]["hop"], 3)
         self.assertEqual(trocas[0]["de"], "142.251.200.106")
         self.assertEqual(trocas[0]["para"], "209.85.173.108")
+        con.close()
+
+    def test_retorna_trocas_mais_recentes_nao_do_hop_mais_alto(self):
+        """Cenário do revisor: trocas em hops diferentes e datas diferentes.
+
+        Sem a correção, truncaria as últimas entradas da lista ordenada por hop,
+        perdendo a troca recente do hop 1 em favor das trocas antigas do hop 5.
+        """
+        linhas = []
+        # Dia 0: hop 1 com IP A, hop 5 com IP X
+        linhas += execucao(BASE_TS, [(1, "1.1.1.1", 0.0, 1.0, 0.8),
+                                     (5, "5.5.5.5", 0.0, 20.0, 18.0)])
+        # Dia 1: hop 5 muda para Y (troca antiga)
+        linhas += execucao(BASE_TS + UM_DIA, [(1, "1.1.1.1", 0.0, 1.0, 0.8),
+                                              (5, "6.6.6.6", 0.0, 20.0, 18.0)])
+        # Dia 2: hop 5 muda para Z (mais antiga)
+        linhas += execucao(BASE_TS + 2 * UM_DIA, [(1, "1.1.1.1", 0.0, 1.0, 0.8),
+                                                   (5, "7.7.7.7", 0.0, 20.0, 18.0)])
+        # Dia 3: hop 1 muda de A para B (troca MAIS RECENTE!)
+        linhas += execucao(BASE_TS + 3 * UM_DIA, [(1, "2.2.2.2", 0.0, 1.0, 0.8),
+                                                   (5, "7.7.7.7", 0.0, 20.0, 18.0)])
+        con = consultas.conectar(construir_banco(linhas))
+
+        # Com limite=2, devem vir as 2 trocas mais recentes:
+        # 1. Hop 1, dia 3 (mais recente)
+        # 2. Hop 5, dia 2 (segunda mais recente)
+        trocas = consultas.trocas_de_rota(con, limite=2)
+        self.assertEqual(len(trocas), 2)
+        # Primeira deve ser a mais recente (hop 1, dia 3)
+        self.assertEqual(trocas[0]["hop"], 1)
+        self.assertEqual(trocas[0]["de"], "1.1.1.1")
+        self.assertEqual(trocas[0]["para"], "2.2.2.2")
         con.close()
 
     def test_conta_desconhecidos_por_dia(self):

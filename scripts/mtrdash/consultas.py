@@ -211,4 +211,6 @@ def trocas_de_rota(con, limite=40):
                 "para": linha["ip"],
             })
         anterior[hop] = linha["ip"]
-    return list(reversed(trocas[-limite:]))
+    # Ordenar por data (descendente) com hop como desempate, depois truncar as mais recentes
+    trocas_ordenadas = sorted(trocas, key=lambda t: (t["dia"], t["hop"]), reverse=True)
+    return trocas_ordenadas[:limite]
