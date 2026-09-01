@@ -139,6 +139,71 @@ class TestAlinhamentoDeEixo(unittest.TestCase):
             pathlib.Path(caminho).unlink()
 
 
+class TestCartaoRecente(unittest.TestCase):
+    """painel_baseline lê `recente` e `baseline` do dicionário devolvido por
+    consultas.comparacao_baseline e usa os dois para montar cada cartão. Uma
+    troca acidental dessas duas chaves não quebra nada visível: os cartões
+    continuam com números plausíveis, só que o valor "atual" exibido passa a
+    ser o histórico e vice-versa, e a classe pior/melhor se inverte junto.
+    Nenhum teste anterior comparava o valor exibido no cartão contra o valor
+    esperado da janela recente — só a presença de texto solto como "Está pior
+    que o normal" — por isso essa troca passaria em silêncio."""
+
+    ULTIMO_TS = BASE_TS + 200 * UM_DIA
+    # Bem além da janela recente (consultas.DIAS_JANELA_RECENTE dias), para não
+    # haver ambiguidade sobre quais execuções caem em cada lado do corte.
+    MARGEM_HISTORICO = consultas.DIAS_JANELA_RECENTE + 5
+
+    def _banco_com_janelas(self, valor_recente, valor_historico):
+        """3 execuções dentro da janela recente com latência constante
+        `valor_recente`, e 20 execuções bem mais antigas com latência
+        constante `valor_historico`. Um único hop (destino direto), sem
+        perda, para que p50 de cada janela seja exatamente o valor
+        constante correspondente — sem depender do método de percentil."""
+        linhas = []
+        for k in range(3):
+            ts = self.ULTIMO_TS - k * UM_DIA
+            linhas.append((ts, 1, "8.8.4.4", 0.0, valor_recente, valor_recente, 0))
+        for k in range(20):
+            ts = self.ULTIMO_TS - (self.MARGEM_HISTORICO + k) * UM_DIA
+            linhas.append((ts, 1, "8.8.4.4", 0.0, valor_historico, valor_historico, 0))
+        return banco_com(linhas)
+
+    def test_janela_recente_pior_mostra_valor_recente_e_classe_pior(self):
+        caminho = self._banco_com_janelas(valor_recente=50.0, valor_historico=5.0)
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_baseline(con)
+            finally:
+                con.close()
+            self.assertIn(
+                '<div class="cartao"><div class="titulo">Latência mediana</div>'
+                '<div class="valor">50.00 ms</div>'
+                '<div class="delta pior">+45.00 ms vs baseline 5.00 ms</div></div>',
+                html,
+            )
+        finally:
+            pathlib.Path(caminho).unlink()
+
+    def test_janela_recente_melhor_mostra_valor_recente_e_classe_melhor(self):
+        caminho = self._banco_com_janelas(valor_recente=5.0, valor_historico=50.0)
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_baseline(con)
+            finally:
+                con.close()
+            self.assertIn(
+                '<div class="cartao"><div class="titulo">Latência mediana</div>'
+                '<div class="valor">5.00 ms</div>'
+                '<div class="delta melhor">-45.00 ms vs baseline 50.00 ms</div></div>',
+                html,
+            )
+        finally:
+            pathlib.Path(caminho).unlink()
+
+
 class TestRobustez(unittest.TestCase):
     def test_banco_vazio_nao_quebra(self):
         caminho = banco_com([])
