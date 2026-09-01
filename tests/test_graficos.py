@@ -60,6 +60,20 @@ class TestGraficoDeLinhas(unittest.TestCase):
         self.assertNotIn("<b>x</b>", svg)
         self.assertIn("&lt;script&gt;", svg)
 
+    def test_cor_hostil_e_escapada_na_polyline(self):
+        svg = graficos.grafico_de_linhas(
+            [{"nome": "p50", "cor": '"><script>', "pontos": [("a", 1.0), ("b", 2.0)]}]
+        )
+        self.assertNotIn('"><script>', svg)
+        self.assertIn("&quot;&gt;&lt;script&gt;", svg)
+
+    def test_cor_hostil_e_escapada_na_legenda(self):
+        svg = graficos.grafico_de_linhas(
+            [{"nome": "p50", "cor": "<img src=x>", "pontos": [("a", 1.0), ("b", 2.0)]}]
+        )
+        self.assertNotIn("<img src=x>", svg)
+        self.assertIn("&lt;img src=x&gt;", svg)
+
 
 class TestGraficoDeBarras(unittest.TestCase):
     ITENS = [
@@ -87,6 +101,17 @@ class TestGraficoDeBarras(unittest.TestCase):
     def test_rotulo_hostil_e_escapado(self):
         itens = [{"rotulo": "<img src=x>", "valor": 1.0, "cor": "#000"}]
         self.assertNotIn("<img", graficos.grafico_de_barras(itens))
+
+    def test_cor_hostil_e_escapada_no_rect(self):
+        itens = [{"rotulo": "a", "valor": 1.0, "cor": '"><script>'}]
+        svg = graficos.grafico_de_barras(itens)
+        self.assertNotIn('"><script>', svg)
+        self.assertIn("&quot;&gt;&lt;script&gt;", svg)
+
+    def test_cor_hostil_e_escapada_na_legenda_barras(self):
+        itens = [{"rotulo": "a", "valor": 1.0, "cor": "<img src=x>"}]
+        svg = graficos.grafico_de_barras(itens)
+        self.assertNotIn("<img src=x>", svg)
 
 
 class TestPaleta(unittest.TestCase):
