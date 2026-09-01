@@ -49,7 +49,15 @@ echo "backup em $BACKUP"
 ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT CAST(Start_Time AS INTEGER), Host, CAST(Hop AS INTEGER) FROM mtr_data);")
 echo "linhas distintas na origem (pós-CAST): $ORIGEM"
 
+# As views saem antes do ALTER. O monitor.sh aplica schema.sql a cada coleta, então
+# num banco ainda legado elas já existem apontando para colunas que não existem — o
+# SQLite não valida as colunas de uma view na criação. O ALTER TABLE tenta reescrever
+# as referências dentro delas e aborta com "no such column: ts". O schema.sql, aplicado
+# logo abaixo, recria as três sobre a tabela nova.
 sqlite3 "$DB" <<SQL
+DROP VIEW IF EXISTS v_loss;
+DROP VIEW IF EXISTS v_run;
+DROP VIEW IF EXISTS v_hop;
 ALTER TABLE mtr_data RENAME TO mtr_legacy;
 SQL
 
