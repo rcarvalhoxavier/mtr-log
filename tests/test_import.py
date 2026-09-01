@@ -15,6 +15,13 @@ MTR.0.95,1785261016,OK,8.8.8.8,3,???,100.00,10,10,0.00,0.00,0.00,0.00,0.00
 MTR.0.95,1785261016,OK,8.8.8.8,4,dns.google,0.00,10,0,8.70,8.26,7.40,8.95,0.44
 """
 
+CSV_SOBREPOSICAO = """Mtr_Version,Start_Time,Status,Host,Hop,Ip,Loss%,Snt, ,Last,Avg,Best,Wrst,StDev,
+MTR.0.95,1785261016,OK,8.8.8.8,1,_gateway,0.00,10,0,0.81,1.05,0.81,1.30,0.16
+MTR.0.95,1785261016,OK,8.8.8.8,2,100.70.0.1,0.00,10,0,3.83,3.84,3.42,4.98,0.46
+MTR.0.95,1785261016,OK,8.8.8.8,5,novo.host.com,0.00,10,0,5.00,5.50,5.00,6.00,0.50
+MTR.0.95,1785261016,OK,8.8.8.8,6,outro.host.com,10.00,10,1,10.00,10.50,10.00,11.00,0.50
+"""
+
 
 class TestImport(unittest.TestCase):
     def setUp(self):
@@ -55,8 +62,30 @@ class TestImport(unittest.TestCase):
 
     def test_reimportar_nao_duplica(self):
         """Sem a chave primária, reimportar um CSV duplicava tudo em silêncio."""
-        self.rodar_import(self.csv, vezes=3)
+        resultado = self.rodar_import(self.csv, vezes=3)
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
         self.assertEqual(self.contar(), 4)
+
+    def test_sobreposicao_parcial_insere_novos(self):
+        """INSERT OR IGNORE permite reimportar CSV com sobreposição parcial.
+
+        Sem OR IGNORE, a statement aborta inteira na primeira colisão de chave.
+        Com OR IGNORE, as repetidas são puladas e as novas entram.
+        """
+        # Importa o CSV original (4 linhas)
+        resultado1 = self.rodar_import(self.csv)
+        self.assertEqual(resultado1.returncode, 0, resultado1.stderr)
+        self.assertEqual(self.contar(), 4)
+
+        # Importa CSV com 2 linhas repetidas (hops 1 e 2) + 2 linhas novas (hops 5 e 6)
+        csv_overlapped = self.base / "sobreposicao.csv"
+        csv_overlapped.write_text(CSV_SOBREPOSICAO, encoding="utf-8")
+        resultado2 = self.rodar_import(csv_overlapped)
+        self.assertEqual(resultado2.returncode, 0, resultado2.stderr)
+
+        # Com INSERT OR IGNORE: 4 originais + 2 novos = 6 total
+        # Sem INSERT OR IGNORE: statement aborta, continua com 4
+        self.assertEqual(self.contar(), 6)
 
     def test_interrogacao_vira_nulo(self):
         self.rodar_import(self.csv)
