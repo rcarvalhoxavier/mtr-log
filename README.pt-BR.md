@@ -139,9 +139,9 @@ Isso grava `dashboard.html` na raiz do repositório. Não há dependências alé
 
 O relatório tem três painéis, cada um respondendo a uma pergunta:
 
-1. **De quem é a culpa** – A degradação nasce na minha rede ou fora dela?
-2. **Está pior que o normal** – O período recente está pior que a linha de base histórica?
-3. **A rota está instável** – O caminho até o destino está mudando ou quebrando?
+1. **Últimas execuções** – Como estão os testes mais recentes, hop por hop? Vem primeiro, porque é o que se quer olhar quando se acabou de notar que a conexão caiu.
+2. **De quem é a culpa** – A degradação nasce na minha rede ou fora dela?
+3. **Está pior que o normal** – O período recente está pior que a linha de base histórica?
 
 **Uma nota sobre perda de pacotes:** perda registrada num hop intermediário que **não** se propaga até o hop de destino é um artefato de ICMP — muitos roteadores despriorizam ou limitam suas próprias respostas ICMP de TTL excedido, o que aparece como "perda" naquele hop sem nenhum impacto real na conectividade. O dashboard (e a view `v_loss` por trás dele) reporta isso explicitamente como **artefato**, separado da perda **real** (quando o próprio hop de destino apresenta perda). Só a perda real é contabilizada como degradação.
 

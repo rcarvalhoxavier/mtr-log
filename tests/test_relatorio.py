@@ -58,38 +58,31 @@ class TestGeracao(unittest.TestCase):
     def tearDown(self):
         pathlib.Path(self.caminho).unlink()
 
-    def test_tem_os_tres_paineis(self):
-        for titulo in ("De quem é a culpa", "Está pior que o normal",
-                       "A rota está instável"):
+    def test_tem_as_tres_secoes(self):
+        for titulo in ("Últimas execuções", "De quem é a culpa",
+                       "Está pior que o normal"):
             self.assertIn(titulo, self.html)
+
+    def test_nao_tem_mais_o_painel_de_rota(self):
+        """Removido: dois dos três componentes mediam o balanceador de carga do
+        destino, não a rede do usuário — 72% dos pares hop-dia tinham exatamente um
+        IP, e 596 das 887 trocas estavam em hops do próprio Google."""
+        self.assertNotIn("A rota está instável", self.html)
 
     def test_e_um_documento_completo(self):
         self.assertTrue(self.html.startswith("<!doctype html>"))
         self.assertIn('<html lang="pt-BR">', self.html)
         self.assertIn("</html>", self.html)
 
-    def test_desenha_graficos(self):
-        self.assertGreaterEqual(self.html.count("<svg"), 4)
+    def test_desenha_os_tres_graficos(self):
+        """Latência diária e barras por segmento em "De quem é a culpa", mais a série
+        dos últimos 30 dias em "Está pior que o normal"."""
+        self.assertEqual(self.html.count("<svg"), 3)
 
     def test_nao_referencia_nada_externo(self):
         """Requisito de autocontenção: nada de CDN, webfont ou script externo."""
         for proibido in ("http://", "https://", "<script", "@import"):
             self.assertNotIn(proibido, self.html)
-
-    def test_registra_a_troca_de_rota(self):
-        """Checar só as duas substrings não bastava: elas aparecem na página
-        em qualquer ordem, então trocar as colunas `de` e `para` na tabela
-        passaria em silêncio — e este é o único teste que guarda a correção de
-        um Critical anterior. A asserção pina a ordem das células: hop, de
-        (IP antigo), para (IP novo)."""
-        self.assertIn("142.251.200.106", self.html)
-        self.assertIn("209.85.173.108", self.html)
-        self.assertIn(
-            '<td class="num">3</td>'
-            "<td>142.251.200.106</td>"
-            "<td>209.85.173.108</td>",
-            self.html,
-        )
 
     def test_separa_perda_real_de_artefato(self):
         """O hop 4 perde 100% nas 30 execuções, mas o destino só perde em uma.
@@ -181,77 +174,6 @@ class TestNotaDoPainel1(unittest.TestCase):
             self.assertEqual(len(re.findall(r"<tr>", corpo)), 40)
         finally:
             pathlib.Path(caminho).unlink()
-
-    def test_tabela_de_trocas_de_rota_diz_quantas_mostra(self):
-        """887 trocas no total, 40 exibidas, sem nenhum rótulo dizendo isso."""
-        linhas = []
-        for dia in range(45):
-            ts = BASE_TS + dia * UM_DIA
-            linhas += [
-                (ts, 1, "_gateway", 0.0, 1.0, 0.8, 0),
-                (ts, 2, f"10.0.0.{dia}", 0.0, 4.0, 3.4, 0),
-                (ts, 3, "dns.google", 0.0, 9.0, 8.0, 0),
-            ]
-        caminho = banco_com(linhas)
-        try:
-            con = consultas.conectar(caminho)
-            try:
-                html = relatorio.painel_rota(con)
-            finally:
-                con.close()
-            self.assertIn(
-                "<strong>40</strong> de <strong>44</strong> trocas de rota", html
-            )
-        finally:
-            pathlib.Path(caminho).unlink()
-
-
-class TestAlinhamentoDeEixo(unittest.TestCase):
-    """O painel_rota monta um eixo de dias comum e preenche com None onde um
-    hop não tem medição — cada hop pode ter seu próprio conjunto de dias.
-    grafico_de_linhas tira os rótulos de X de series[0] e posiciona cada
-    ponto pelo índice: se um painel passar séries com tamanhos diferentes
-    (por exemplo, o próprio dicionário de cada hop, sem preencher os dias
-    ausentes), pontos de dias diferentes acabam na mesma posição x, sem
-    nenhum sinal de erro. Este teste comprova que a posição x de um ponto
-    representa o dia certo, não apenas o índice dentro dos dados daquele hop."""
-
-    def test_hop_com_menos_dias_cai_na_posicao_x_correta(self):
-        # hop 1 mede nos três dias; hop 2 só mede no último.
-        linhas = [
-            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
-            (BASE_TS + UM_DIA, 1, "_gateway", 0.0, 1.0, 0.8, 0),
-            (BASE_TS + 2 * UM_DIA, 1, "_gateway", 0.0, 1.0, 0.8, 0),
-            (BASE_TS + 2 * UM_DIA, 2, "1.2.3.4", 0.0, 4.0, 3.4, 0),
-        ]
-        caminho = banco_com(linhas)
-        try:
-            con = consultas.conectar(caminho)
-            try:
-                html = relatorio.painel_rota(con)
-            finally:
-                con.close()
-
-            polylines = re.findall(r'<polyline points="([^"]+)"', html)
-            # A primeira polyline (hop 1, ordenado primeiro) tem os três dias;
-            # a segunda (hop 2) tem só o último.
-            self.assertGreaterEqual(len(polylines), 2)
-            pontos_hop1 = polylines[0].split()
-            pontos_hop2 = polylines[1].split()
-            self.assertEqual(len(pontos_hop1), 3)
-            self.assertEqual(len(pontos_hop2), 1)
-
-            x_ultimo_hop1 = pontos_hop1[-1].split(",")[0]
-            x_unico_hop2 = pontos_hop2[0].split(",")[0]
-            self.assertEqual(
-                x_unico_hop2, x_ultimo_hop1,
-                "o único ponto do hop 2 (medido no último dia) deveria cair "
-                "na mesma posição x do último ponto do hop 1, não na posição "
-                "inicial do eixo",
-            )
-        finally:
-            pathlib.Path(caminho).unlink()
-
 
 class TestCartaoRecente(unittest.TestCase):
     """painel_baseline lê `recente` e `baseline` do dicionário devolvido por

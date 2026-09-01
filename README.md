@@ -139,9 +139,9 @@ This writes `dashboard.html` in the repository root. It has no dependencies beyo
 
 The report has three panels, each answering one question:
 
-1. **De quem é a culpa (Who's to blame)** – Does the degradation originate on my own network or outside it?
-2. **Está pior que o normal (Is it worse than usual)** – Is the recent time window worse than the historical baseline?
-3. **A rota está instável (Is the route unstable)** – Is the path to the destination changing or breaking?
+1. **Últimas execuções (Recent runs)** – What do the most recent tests look like, hop by hop? Shown first, because this is what you want when you have just noticed the connection is down.
+2. **De quem é a culpa (Who's to blame)** – Does the degradation originate on my own network or outside it?
+3. **Está pior que o normal (Is it worse than usual)** – Is the recent time window worse than the historical baseline?
 
 **A note on packet loss:** loss reported at an intermediate hop that does **not** propagate to the destination hop is an ICMP artifact — many routers deprioritize or rate-limit their own ICMP TTL-exceeded replies, which shows up as "loss" at that hop without any real impact on connectivity. The dashboard (and the underlying `v_loss` view) reports this explicitly as an **artifact**, separate from **real** loss (where the destination hop itself shows loss). Only real loss is counted as degradation.
 
