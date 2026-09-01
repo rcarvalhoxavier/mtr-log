@@ -66,6 +66,12 @@ SEGMENTOS = (
         "A latência aqui é do seu roteador e do enlace até ele.",
     ),
     (
+        "provedor",
+        "O roteador do provedor quando ele não está em modo bridge: ele faz NAT antes "
+        "de entregar o tráfego, então aparece como um segundo salto com endereço "
+        "privado. Sem separá-lo, o equipamento dele entraria na mesma barra que o seu.",
+    ),
+    (
         "cgnat",
         "A borda do provedor, na faixa 100.64.0.0/10 reservada para CGNAT — o "
         "compartilhamento de um mesmo IP público entre vários assinantes. É o "
@@ -243,7 +249,18 @@ def painel_agora(con, limite=consultas.EXECUCOES_RECENTES):
 </section>"""
 
 
+def _segmentos_presentes(medidos):
+    """Só as linhas da legenda que correspondem a barras desenhadas.
+
+    Uma topologia sem CGNAT visível não desenha essa barra, e explicar um segmento
+    ausente manda o leitor procurar no gráfico algo que não está lá.
+    """
+    rotulos = {d["segmento"] for d in medidos}
+    return tuple(par for par in SEGMENTOS if par[0] in rotulos)
+
+
 def painel_culpado(con):
+    segmentos = consultas.latencia_por_segmento(con)
     grafico_latencia = graficos.grafico_de_linhas(
         _serie_de_latencia(consultas.latencia_diaria(con))
     )
@@ -254,7 +271,7 @@ def painel_culpado(con):
             "valor": s["p50"],
             "cor": graficos.CORES.get(s["segmento"], graficos.CORES["neutro"]),
         }
-        for s in consultas.latencia_por_segmento(con)
+        for s in segmentos
     ])
 
     contagem = consultas.contagem_de_classificacao(con)
@@ -297,7 +314,7 @@ def painel_culpado(con):
 <h3>Latência mínima por segmento do caminho</h3>
 {barras}
 <h3>O que é cada segmento</h3>
-{_tabela(["segmento", "o que é"], SEGMENTOS)}
+{_tabela(["segmento", "o que é"], _segmentos_presentes(segmentos))}
 <p class="rodape-tabela">A barra usa a latência <strong>mínima</strong> de cada
 segmento, não a média: roteadores intermediários despriorizam as próprias respostas
 ICMP, e o mínimo é bem menos poluído por esse efeito. Hops que não responderam ficam
@@ -363,10 +380,18 @@ def gerar(caminho_db):
     try:
         corpo = painel_agora(con) + painel_culpado(con) + painel_baseline(con)
         primeiro, ultimo = con.execute(
+            # O piso de timestamp descarta linhas de CSV corrompido. Uma escrita
+            # interrompida desloca as colunas, e o Start_Time acaba recebendo um
+            # fragmento de latência: valores como 0, 6 ou 31 segundos após o epoch,
+            # que fariam o subtítulo anunciar 1969. Qualquer coleta anterior a 2000
+            # é artefato de parsing, não medição.
             "SELECT datetime(MIN(ts),'unixepoch','localtime'),"
-            " datetime(MAX(ts),'unixepoch','localtime') FROM v_run"
+            " datetime(MAX(ts),'unixepoch','localtime') FROM v_run WHERE ts > ?",
+            (consultas.TS_MINIMO,),
         ).fetchone()
-        total = con.execute("SELECT COUNT(*) FROM v_run").fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM v_run WHERE ts > ?", (consultas.TS_MINIMO,)
+        ).fetchone()[0]
     finally:
         con.close()
 

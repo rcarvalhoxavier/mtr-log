@@ -4,6 +4,7 @@ from html import escape
 # Paleta fixa. Centralizada para que nenhum painel invente cor própria.
 CORES = {
     "lan": "#2563eb",
+    "provedor": "#c2410c",
     "cgnat": "#d97706",
     "transito": "#7c3aed",
     "destino": "#0f766e",

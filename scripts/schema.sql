@@ -39,7 +39,29 @@ SELECT
     m.*,
     CASE
         WHEN m.ip IS NULL                                        THEN 'desconhecido'
+        -- O primeiro salto é o roteador local por definição. O hostname dele pode ser
+        -- qualquer coisa e não seguir padrão nenhum, como `dlinkrouter.Dlink`.
         WHEN m.hop = 1                                           THEN 'lan'
+        -- Segundo salto ainda privado: é o roteador do provedor sem modo bridge, que
+        -- faz NAT antes de entregar o tráfego. Sem esta regra ele cairia em `lan` e a
+        -- barra do painel misturaria o equipamento dele com o do assinante.
+        -- Um terceiro nível de NAT cairia em `lan` pela regra de anomalia abaixo; é
+        -- exótico o bastante para não valer o custo de rastrear a cadeia inteira.
+        WHEN m.hop = 2 AND (
+                 m.ip LIKE '192.168.%'
+              OR m.ip LIKE '10.%'
+              OR m.ip GLOB '172.1[6-9].*'
+              OR m.ip GLOB '172.2[0-9].*'
+              OR m.ip GLOB '172.3[0-1].*'
+              OR m.ip NOT LIKE '%.%'
+              OR m.ip LIKE '%.home.arpa'
+              OR m.ip LIKE '%.lan'
+              OR m.ip LIKE '%.local')                            THEN 'provedor'
+        -- 100.64.0.0/10, faixa de CGNAT: segundo octeto de 64 a 127.
+        WHEN m.ip GLOB '100.6[4-9].*'
+          OR m.ip GLOB '100.[7-9][0-9].*'
+          OR m.ip GLOB '100.1[0-1][0-9].*'
+          OR m.ip GLOB '100.12[0-7].*'                           THEN 'cgnat'
         WHEN m.ip LIKE '192.168.%'                               THEN 'lan'
         WHEN m.ip LIKE '10.%'                                    THEN 'lan'
         WHEN m.ip GLOB '172.1[6-9].*'
@@ -49,11 +71,6 @@ SELECT
         WHEN m.ip LIKE '%.home.arpa'
           OR m.ip LIKE '%.lan'
           OR m.ip LIKE '%.local'                                 THEN 'lan'
-        -- 100.64.0.0/10, faixa de CGNAT: segundo octeto de 64 a 127.
-        WHEN m.ip GLOB '100.6[4-9].*'
-          OR m.ip GLOB '100.[7-9][0-9].*'
-          OR m.ip GLOB '100.1[0-1][0-9].*'
-          OR m.ip GLOB '100.12[0-7].*'                           THEN 'cgnat'
         ELSE 'transito'
     END AS segmento
 FROM mtr_data m;
