@@ -21,7 +21,7 @@ fi
 
 # Detectar estado inconsistente: se mtr_legacy existe, é um aborto anterior não resolvido.
 # Banco já migrado tem 'ts' mas NÃO tem 'mtr_legacy'.
-LEGACY_EXISTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mtr_legacy';" 2>/dev/null || echo 0)
+LEGACY_EXISTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mtr_legacy';")
 if [ "$LEGACY_EXISTS" -eq 1 ]; then
     echo "ERRO: banco em estado inconsistente. A tabela mtr_legacy existe." >&2
     echo "Isto acontece quando a migração anterior foi abortada." >&2
