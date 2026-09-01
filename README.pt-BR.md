@@ -12,9 +12,10 @@ Este repositório contém um script em Shell que **monitora** a conectividade de
 4. [Uso](#uso)
 5. [Importando Dados no SQLite](#importando-dados-no-sqlite)
 6. [Dashboard](#dashboard)
-7. [Agendamento com Crontab](#agendamento-com-crontab)
-8. [Customizações](#customizações)
-9. [Licença](#licença)
+7. [Testes](#testes)
+8. [Agendamento com Crontab](#agendamento-com-crontab)
+9. [Customizações](#customizações)
+10. [Licença](#licença)
 
 ---
 
@@ -159,6 +160,34 @@ Os códigos de saída importam para quem chama o script de dentro de outro:
 | `0` | Migração concluída, ou banco já migrado (no-op). |
 | `1` | Nada foi alterado: banco ou arquivo de schema não encontrado, ou a contagem de linhas da origem e do destino divergiu. No caso da divergência, tanto a tabela `mtr_legacy` quanto o backup são preservados. |
 | `2` | **O banco ficou meio-migrado.** Foi encontrada uma tabela `mtr_legacy` remanescente de uma execução abortada, então esta execução se recusou a tocar em qualquer coisa. Resolva à mão — restaure o backup, ou remova `mtr_legacy` se `mtr_data` já estiver correta — antes de rodar de novo. |
+
+---
+
+## Testes
+
+A suíte usa `unittest` da biblioteca padrão — não há nada para instalar:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Para rodar um módulo só:
+
+```bash
+python3 -m unittest tests.test_schema -v
+```
+
+Os módulos são `test_schema` (schema tipado e as views de análise), `test_migracao` (migração do layout legado, incluindo os caminhos de aborto), `test_import` (o caminho de import do `monitor.sh`), `test_consultas` (consultas e estatística), `test_graficos` (primitivas de SVG) e `test_relatorio` (geração do relatório, ponta a ponta).
+
+Cada teste monta seu próprio banco SQLite temporário e o remove ao final — **a suíte nunca lê nem escreve no `mtr_data.db`**. Se você acrescentar testes que exercitem o `monitor.sh`, preserve esse isolamento definindo a variável de ambiente `MTR_DB`, que sobrescreve o caminho do banco:
+
+```bash
+MTR_DB=/tmp/scratch.db ./monitor.sh
+```
+
+Não confie em atribuir `DB` depois de dar `source` no script: isso só funciona enquanto a atribuição vier depois da linha do `source`, então uma mudança na ordem das instruções mandaria dados de teste direto para o seu banco de coleta.
+
+> **Nota:** rode o discovery exatamente como mostrado. A variante `-t .` (`python3 -m unittest discover -s tests -t .`) falha com `ImportError`, porque `tests/` não tem `__init__.py`.
 
 ---
 

@@ -12,9 +12,10 @@ This repository contains a Shell script that **monitors** a host’s connectivit
 4. [Usage](#usage)
 5. [Viewing Data in SQLite](#viewing-data-in-sqlite)
 6. [Dashboard](#dashboard)
-7. [Scheduling with Crontab](#scheduling-with-crontab)
-8. [Customizations](#customizations)
-9. [License](#license)
+7. [Tests](#tests)
+8. [Scheduling with Crontab](#scheduling-with-crontab)
+9. [Customizations](#customizations)
+10. [License](#license)
 
 ---
 
@@ -159,6 +160,34 @@ Exit codes are worth checking when calling it from a script:
 | `0` | Migration completed, or the database was already migrated (no-op). |
 | `1` | Nothing was changed: database or schema file not found, or the row counts of source and destination diverged. In the divergence case the `mtr_legacy` table and the backup are both preserved. |
 | `2` | **The database is half-migrated.** An `mtr_legacy` table left over from a previously aborted run was found, so this run refused to touch anything. Resolve it by hand — restore the backup, or drop `mtr_legacy` if `mtr_data` is already correct — before running again. |
+
+---
+
+## Tests
+
+The suite uses `unittest` from the standard library — nothing to install:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+To run a single module:
+
+```bash
+python3 -m unittest tests.test_schema -v
+```
+
+The modules are `test_schema` (typed schema and the analysis views), `test_migracao` (migration from the legacy layout, including the abort paths), `test_import` (the `monitor.sh` import path), `test_consultas` (queries and statistics), `test_graficos` (SVG primitives) and `test_relatorio` (report generation, end to end).
+
+Every test builds its own temporary SQLite database and removes it afterwards — **the suite never reads or writes `mtr_data.db`**. If you add tests that exercise `monitor.sh`, keep that isolation by setting the `MTR_DB` environment variable, which overrides the database path:
+
+```bash
+MTR_DB=/tmp/scratch.db ./monitor.sh
+```
+
+Do not rely on assigning `DB` after sourcing the script instead: that only works while the assignment happens to come after the `source` line, so a change in statement order would send test data straight into your collection database.
+
+> **Note:** run discovery exactly as shown. The `-t .` variant (`python3 -m unittest discover -s tests -t .`) fails with `ImportError`, because `tests/` has no `__init__.py`.
 
 ---
 
