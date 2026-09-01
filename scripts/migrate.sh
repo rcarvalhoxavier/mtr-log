@@ -1,6 +1,8 @@
 #!/bin/bash
 # Migra o banco legado (todas as colunas TEXT) para o schema tipado.
 # Idempotente: reexecutar num banco já migrado não faz nada.
+# PRÉ-CONDIÇÃO: o cron responsável pela escrita (monitor.sh) deve estar pausado antes da migração.
+#               A Task 7 do plano é responsável por fazer isso automaticamente.
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
@@ -10,6 +12,25 @@ SCHEMA="$SCRIPT_DIR/schema.sql"
 if [ ! -f "$DB" ]; then
     echo "banco não encontrado: $DB" >&2
     exit 1
+fi
+
+if [ ! -f "$SCHEMA" ]; then
+    echo "schema não encontrado: $SCHEMA" >&2
+    exit 1
+fi
+
+# Detectar estado inconsistente: se mtr_legacy existe, é um aborto anterior não resolvido.
+# Banco já migrado tem 'ts' mas NÃO tem 'mtr_legacy'.
+LEGACY_EXISTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mtr_legacy';" 2>/dev/null || echo 0)
+if [ "$LEGACY_EXISTS" -eq 1 ]; then
+    echo "ERRO: banco em estado inconsistente. A tabela mtr_legacy existe." >&2
+    echo "Isto acontece quando a migração anterior foi abortada." >&2
+    echo "Decisões possíveis:" >&2
+    echo "  1. Restaurar do backup (.bak-YYYYMMDD_HHMMSS) e retentar" >&2
+    echo "  2. Se os dados em mtr_data estão OK, remover mtr_legacy manualmente:" >&2
+    echo "     sqlite3 $DB \"DROP TABLE mtr_legacy;\"" >&2
+    echo "     E reexecutar este script (será no-op)." >&2
+    exit 2
 fi
 
 # Já migrado? A coluna 'ts' só existe no schema novo.
@@ -23,8 +44,10 @@ BACKUP="$DB.bak-$(date +%Y%m%d_%H%M%S)"
 cp "$DB" "$BACKUP"
 echo "backup em $BACKUP"
 
-ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT Start_Time, Host, Hop FROM mtr_data);")
-echo "linhas distintas na origem: $ORIGEM"
+# Contar ORIGEM com o mesmo CAST que será aplicado no destino para evitar colisões de tipo.
+# Ex: Hop='2' e Hop='02' são distintos em TEXT mas colapsam após CAST(Hop AS INTEGER).
+ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT CAST(Start_Time AS INTEGER), Host, CAST(Hop AS INTEGER) FROM mtr_data);")
+echo "linhas distintas na origem (pós-CAST): $ORIGEM"
 
 sqlite3 "$DB" <<SQL
 ALTER TABLE mtr_data RENAME TO mtr_legacy;

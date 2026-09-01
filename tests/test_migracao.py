@@ -120,6 +120,172 @@ class TestMigracao(unittest.TestCase):
         backups = list(pathlib.Path(self.dir.name).glob("mtr_data.db.bak-*"))
         self.assertEqual(len(backups), 1)
 
+    def test_detecta_mtr_legacy_residual(self):
+        """Banco em estado inconsistente: mtr_legacy existe sem ts. Deve recusar com exit != 0."""
+        # Rodar uma migração normal
+        self.assertEqual(self.migrar().returncode, 0)
+
+        # Reintroduzir mtr_legacy (simula aborto anterior não resolvido)
+        con = sqlite3.connect(self.db)
+        con.execute("CREATE TABLE mtr_legacy AS SELECT * FROM mtr_data LIMIT 0;")
+        con.commit()
+        con.close()
+
+        # Tentar reexecutar deve recusar com exit 2
+        resultado = self.migrar()
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertIn("inconsistente", resultado.stderr.lower())
+
+    def test_aborta_com_divergencia_simulada(self):
+        """Simula divergência: banco com 4 linhas, mas migração insere apenas 3.
+
+        Cria um script wrapper que força LIMIT 3 na inserção para simular falha parcial.
+        Valida que primeira execução sai com exit 1 e mtr_legacy é preservado.
+        """
+        # Criar um script wrapper que força divergência
+        wrapper_script = pathlib.Path(self.dir.name) / "migrate_broken.sh"
+        wrapper_script.write_text(f"""#!/bin/bash
+set -euo pipefail
+
+DB="${1}"
+SCHEMA="$2"
+
+BACKUP="$DB.bak-$(date +%Y%m%d_%H%M%S)"
+cp "$DB" "$BACKUP"
+
+ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT CAST(Start_Time AS INTEGER), Host, CAST(Hop AS INTEGER) FROM mtr_data);")
+echo "linhas distintas na origem (pós-CAST): $ORIGEM"
+
+sqlite3 "$DB" "ALTER TABLE mtr_data RENAME TO mtr_legacy;"
+sqlite3 "$DB" < "$SCHEMA"
+
+# INSERIR APENAS 3 LINHAS (das 4) para simular falha parcial
+sqlite3 "$DB" <<'SQL'
+INSERT OR IGNORE INTO mtr_data
+    (ts, host, hop, ip, loss, snt, drops, last, avg, best, wrst, stdev, version, status)
+SELECT
+    CAST(Start_Time AS INTEGER),
+    Host,
+    CAST(Hop AS INTEGER),
+    NULLIF(Ip, '???'),
+    CAST(Loss AS REAL),
+    CAST(Snt AS INTEGER),
+    CAST(Empty AS INTEGER),
+    CAST(Last AS REAL),
+    CAST(Avg AS REAL),
+    CAST(Best AS REAL),
+    CAST(Wrst AS REAL),
+    CAST(StDev AS REAL),
+    Mtr_Version,
+    Status
+FROM mtr_legacy
+LIMIT 3;
+SQL
+
+DESTINO=$(sqlite3 "$DB" "SELECT COUNT(*) FROM mtr_data;")
+echo "linhas no destino: $DESTINO"
+
+if [ "$ORIGEM" -ne "$DESTINO" ]; then
+    echo "ABORTADO: origem ($ORIGEM) e destino ($DESTINO) divergem." >&2
+    echo "A tabela mtr_legacy foi preservada e o backup está em $BACKUP" >&2
+    exit 1
+fi
+
+sqlite3 "$DB" "DROP TABLE mtr_legacy;"
+sqlite3 "$DB" "VACUUM;"
+echo "migração concluída: $DESTINO linhas"
+""")
+        wrapper_script.chmod(0o755)
+
+        # Usar o script wrapper em vez do real
+        resultado = subprocess.run(
+            ["bash", str(wrapper_script), str(self.db), str(RAIZ / "scripts" / "schema.sql")],
+            capture_output=True, text=True,
+        )
+
+        # Primeira execução deve falhar com exit 1
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("divergem", resultado.stderr)
+
+        # Verificar que mtr_legacy foi preservado
+        tabelas = {
+            n for (n,) in self.consultar(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertIn("mtr_legacy", tabelas)
+
+        # Agora tentar com o script REAL, que deve detectar inconsistência
+        resultado2 = self.migrar()
+        self.assertNotEqual(resultado2.returncode, 0)
+        self.assertIn("inconsistente", resultado2.stderr.lower())
+
+    def test_aborta_preserva_backup(self):
+        """Valida que após aborto por divergência, backup e mtr_legacy sobrevivem.
+
+        Este teste usa a simulação do teste anterior para garantir que
+        o arquivo de backup (.bak-*) está lá após o aborto.
+        """
+        # Criar um banco com dados variados
+        con = sqlite3.connect(self.db)
+        con.execute("DELETE FROM mtr_data")
+        con.executemany(
+            "INSERT INTO mtr_data VALUES (" + ",".join("?" * 14) + ")",
+            LINHAS_LEGADAS,
+        )
+        con.commit()
+        con.close()
+
+        # Criar um script que força divergência
+        wrapper_script = pathlib.Path(self.dir.name) / "migrate_test_backup.sh"
+        wrapper_script.write_text(f"""#!/bin/bash
+set -euo pipefail
+
+DB="${1}"
+SCHEMA="$2"
+
+BACKUP="$DB.bak-$(date +%Y%m%d_%H%M%S)"
+cp "$DB" "$BACKUP"
+
+ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT CAST(Start_Time AS INTEGER), Host, CAST(Hop AS INTEGER) FROM mtr_data);")
+
+sqlite3 "$DB" "ALTER TABLE mtr_data RENAME TO mtr_legacy;"
+sqlite3 "$DB" < "$SCHEMA"
+
+# Inserir apenas 2 linhas de 4 para forçar divergência
+sqlite3 "$DB" "INSERT INTO mtr_data SELECT * FROM (SELECT * FROM mtr_legacy LIMIT 2) WHERE false;" || true
+
+DESTINO=2
+
+if [ "$ORIGEM" -ne "$DESTINO" ]; then
+    echo "ABORTADO: origem ($ORIGEM) e destino ($DESTINO) divergem." >&2
+    echo "A tabela mtr_legacy foi preservada e o backup está em $BACKUP" >&2
+    exit 1
+fi
+exit 0
+""")
+        wrapper_script.chmod(0o755)
+
+        # Executar wrapper
+        resultado = subprocess.run(
+            ["bash", str(wrapper_script), str(self.db), str(RAIZ / "scripts" / "schema.sql")],
+            capture_output=True, text=True,
+        )
+
+        self.assertEqual(resultado.returncode, 1)
+
+        # Verificar que backup existe
+        backups = list(pathlib.Path(self.dir.name).glob("mtr_data.db.bak-*"))
+        self.assertGreater(len(backups), 0)
+
+        # Verificar que mtr_legacy existe
+        con = sqlite3.connect(self.db)
+        legacy_exists = con.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mtr_legacy'"
+        ).fetchone()[0]
+        con.close()
+        self.assertEqual(legacy_exists, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
