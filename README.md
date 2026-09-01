@@ -106,7 +106,7 @@ Typical columns you may see in MTR CSV outputs:
 12. **Wrst** – Highest (worst) latency observed (ms).
 13. **StDev** – Standard deviation of the latency (ms).
 
-If your version of MTR produces additional columns (e.g., `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), make sure to update the **CREATE TABLE** statement in `monitor.sh` to match your actual CSV format.
+If your version of MTR produces additional columns (e.g., `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), make sure to update the schema definition in `scripts/schema.sql` to match your actual CSV format — that file is the single source of truth for the database structure, applied by both `monitor.sh` and `scripts/migrate.sh`.
 
 ---
 

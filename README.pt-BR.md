@@ -106,7 +106,7 @@ Algumas colunas típicas que podem aparecer no CSV do MTR são:
 12. **Wrst** – Pior (maior) latência (ms).
 13. **StDev** – Desvio padrão (ms).
 
-Se o seu MTR gerar colunas adicionais (por exemplo `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), ajuste o **CREATE TABLE** em `monitor.sh` conforme necessário.
+Se o seu MTR gerar colunas adicionais (por exemplo `Mtr_Version`, `Start_Time`, `Status`, `Hop`, etc.), ajuste a definição do schema em `scripts/schema.sql` conforme necessário — esse arquivo é a fonte única da estrutura do banco, aplicada tanto por `monitor.sh` quanto por `scripts/migrate.sh`.
 
 ---
 
