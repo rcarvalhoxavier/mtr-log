@@ -28,7 +28,8 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 6px
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #e2e8f0; }
 th { color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercase;
      letter-spacing: .04em; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.num { text-align: right; }
+td.num { font-variant-numeric: tabular-nums; }
 .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
            gap: 14px; margin-bottom: 8px; }
 .cartao { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; }
@@ -50,19 +51,27 @@ def _numero(valor, casas=2, sufixo=""):
     return "—" if valor is None else f"{valor:.{casas}f}{sufixo}"
 
 
-def _tabela(cabecalhos, linhas):
+def _tabela(cabecalhos, linhas, colunas_numericas=()):
+    """Monta uma tabela HTML.
+
+    `colunas_numericas` são os índices das colunas alinhadas à direita. O
+    alinhamento é por coluna e vale para o cabeçalho junto com as células: decidir
+    por célula, olhando o tipo Python, deixava cabeçalho à esquerda e valor à
+    direita na mesma coluna, e quebrava também quando uma célula vinha formatada
+    como texto (um percentual) ou como o travessão de valor ausente.
+    """
     if not linhas:
         return graficos.VAZIO
-    cabeca = "".join(f"<th>{escape(str(c))}</th>" for c in cabecalhos)
+
+    numericas = set(colunas_numericas)
+
+    def celula(tag, indice, valor):
+        classe = ' class="num"' if indice in numericas else ""
+        return f"<{tag}{classe}>{escape(str(valor))}</{tag}>"
+
+    cabeca = "".join(celula("th", i, c) for i, c in enumerate(cabecalhos))
     corpo = "".join(
-        "<tr>"
-        + "".join(
-            f'<td class="num">{escape(str(celula))}</td>'
-            if isinstance(celula, (int, float))
-            else f"<td>{escape(str(celula))}</td>"
-            for celula in linha
-        )
-        + "</tr>"
+        "<tr>" + "".join(celula("td", i, v) for i, v in enumerate(linha)) + "</tr>"
         for linha in linhas
     )
     return f"<table><thead><tr>{cabeca}</tr></thead><tbody>{corpo}</tbody></table>"
@@ -121,6 +130,7 @@ def painel_culpado(con):
             (e["quando"], _numero(e["loss_destino"], 2, "%"), e["drops"], e["hops"])
             for e in eventos
         ],
+        colunas_numericas=(1, 2, 3),
     )
     tabela += _rodape_tabela(
         len(eventos), contagem.get("real", 0), "execuções de perda real"
@@ -241,6 +251,7 @@ def painel_rota(con):
     tabela = _tabela(
         ["dia", "hop", "de", "para"],
         [(t["dia"], t["hop"], t["de"], t["para"]) for t in trocas],
+        colunas_numericas=(1,),
     )
     tabela += _rodape_tabela(len(trocas), total_de_trocas, "trocas de rota")
 

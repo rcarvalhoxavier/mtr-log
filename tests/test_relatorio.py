@@ -322,6 +322,63 @@ class TestCartaoRecente(unittest.TestCase):
             pathlib.Path(caminho).unlink()
 
 
+class TestAlinhamentoDeTabela(unittest.TestCase):
+    """Cabeçalho e células de uma coluna numérica têm que concordar no alinhamento.
+
+    A versão anterior decidia o alinhamento por célula, olhando o tipo Python, então
+    uma coluna de inteiros saía com o `th` à esquerda e os `td` à direita, e o número
+    aparecia solto, longe do próprio cabeçalho.
+    """
+
+    def test_coluna_numerica_alinha_cabecalho_junto_com_as_celulas(self):
+        html = relatorio._tabela(
+            ["quando", "perda", "pacotes"],
+            [("2026-08-31", "10.00%", 3)],
+            colunas_numericas=(1, 2),
+        )
+        self.assertIn('<th class="num">perda</th>', html)
+        self.assertIn('<th class="num">pacotes</th>', html)
+        self.assertIn('<td class="num">10.00%</td>', html)
+        self.assertIn('<td class="num">3</td>', html)
+
+    def test_coluna_de_texto_nao_recebe_alinhamento(self):
+        html = relatorio._tabela(["quando"], [("2026-08-31",)])
+        self.assertIn("<th>quando</th>", html)
+        self.assertIn("<td>2026-08-31</td>", html)
+        self.assertNotIn("num", html)
+
+    def test_alinhamento_nao_depende_do_tipo_da_celula(self):
+        """`_numero` devolve string, e valor ausente vira travessão: os dois
+        continuam na coluna numérica."""
+        html = relatorio._tabela(
+            ["perda"],
+            [(relatorio._numero(10.0, 2, "%"),), (relatorio._numero(None),)],
+            colunas_numericas=(0,),
+        )
+        self.assertIn('<td class="num">10.00%</td>', html)
+        self.assertIn('<td class="num">—</td>', html)
+
+    def test_painel_declara_as_colunas_numericas_da_tabela_de_perda(self):
+        """Guarda o ponto de chamada: remover `colunas_numericas` de painel_culpado
+        não seria pego pelos testes de unidade acima."""
+        caminho = banco_com([
+            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (BASE_TS, 2, "dns.google", 30.0, 9.0, 8.0, 3),
+        ])
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_culpado(con)
+            finally:
+                con.close()
+            self.assertIn('<th class="num">pacotes perdidos</th>', html)
+            self.assertIn('<th class="num">hops</th>', html)
+            self.assertIn('<th class="num">perda no destino</th>', html)
+            self.assertIn("<th>quando</th>", html)
+        finally:
+            pathlib.Path(caminho).unlink()
+
+
 class TestRobustez(unittest.TestCase):
     def test_banco_vazio_nao_quebra(self):
         caminho = banco_com([])
