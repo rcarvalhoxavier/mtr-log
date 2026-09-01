@@ -50,6 +50,27 @@ footer { color: #64748b; font-size: 13px; text-align: center; }
 """
 
 
+# Os quatro valores de `classificacao` de v_loss, com o que cada um quer dizer.
+# A tabela é exibida junto da tira de status porque quem abre o dashboard no meio de
+# uma interrupção lê a palavra sem ter contexto para ela — e a diferença entre
+# `artefato` e `real` é justamente o que decide se há motivo para preocupação.
+SITUACOES = (
+    ("sem_perda", "Nenhuma perda em nenhum hop do caminho."),
+    ("real", "A perda chegou ao hop de destino: a conexão perdeu pacote de verdade."),
+    (
+        "artefato",
+        "A perda apareceu só em hop intermediário e o destino respondeu limpo. É o "
+        "roteador do meio não respondendo a ICMP por política — ele encaminha o "
+        "tráfego normalmente e se recusa a falar sobre si mesmo. Não é pacote perdido.",
+    ),
+    (
+        "incompleta",
+        "A trace não chegou ao alvo. O que foi medido é o caminho parcial, não a "
+        "conexão até o destino, então a latência é de um salto intermediário.",
+    ),
+)
+
+
 def _numero(valor, casas=2, sufixo=""):
     return "—" if valor is None else f"{valor:.{casas}f}{sufixo}"
 
@@ -184,6 +205,8 @@ def painel_agora(con, limite=consultas.EXECUCOES_RECENTES):
 <p class="frescor">Gerado em {escape(str(gerado_em))}. Última execução:
 {escape(execucoes[0]["quando"])}, {minutos} {plural} antes.</p>
 {tira}
+<h3>O que cada situação quer dizer</h3>
+{_tabela(["situação", "significado"], SITUACOES)}
 <h3>Cada hop, execução por execução</h3>
 <div class="matriz">{matriz}</div>
 </section>"""

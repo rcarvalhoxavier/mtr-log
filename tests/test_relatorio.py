@@ -332,6 +332,21 @@ def matriz_de_hops(html):
     ]
 
 
+def legenda_de_situacao(html):
+    """Pares (situação, significado) da tabela de legenda, e só dela.
+
+    Escopar importa: as palavras da legenda também aparecem na coluna `situação` da
+    tira de status, então procurá-las no HTML inteiro passa mesmo com a legenda
+    removida.
+    """
+    bloco = html[html.index("O que cada situação quer dizer"):html.index('class="matriz"')]
+    corpo = re.search(r"<tbody>(.*?)</tbody>", bloco, re.S).group(1)
+    return [
+        tuple(re.sub(r"<[^>]+>", "", c) for c in re.findall(r"<td[^>]*>.*?</td>", tr, re.S))
+        for tr in re.findall(r"<tr>(.*?)</tr>", corpo, re.S)
+    ]
+
+
 class TestPainelAgora(unittest.TestCase):
     """A seção "Agora": as últimas execuções, para diagnosticar uma interrupção."""
 
@@ -386,6 +401,24 @@ class TestPainelAgora(unittest.TestCase):
         antiga_hop3 = linhas[2][2]
         self.assertIn("dns.google", antiga_hop3)
         self.assertNotIn("%", antiga_hop3)
+
+    def test_legenda_define_as_quatro_situacoes(self):
+        """A coluna `situação` mostra a palavra crua. Sem a legenda ao lado, quem abre
+        o dashboard no meio de uma interrupção lê `artefato` sem ter contexto."""
+        pares = legenda_de_situacao(self._painel())
+        self.assertEqual(
+            [valor for valor, _ in pares],
+            ["sem_perda", "real", "artefato", "incompleta"],
+        )
+
+    def test_legenda_explica_artefato_como_limitacao_de_icmp(self):
+        significados = dict(legenda_de_situacao(self._painel()))
+        self.assertIn("ICMP", significados["artefato"])
+
+    def test_legenda_vem_entre_a_tira_de_status_e_a_matriz(self):
+        html = self._painel()
+        self.assertLess(html.index("chegou ao alvo"), html.index("significado"))
+        self.assertLess(html.index("significado"), html.index('class="matriz"'))
 
     def test_hop_sem_resposta_nao_exibe_latencia(self):
         """O mtr grava avg 0.0 para um hop que não respondeu. Isso é ausência de
