@@ -5,3 +5,6 @@ dashboard.html
 *.db.bak-*
 __pycache__/
 docs/
+monitor-barreto/
+dashboard-*.html
+*.pdf

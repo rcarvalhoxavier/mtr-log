@@ -444,6 +444,26 @@ class TestLegendaDeSegmento(unittest.TestCase):
         descricoes = dict(legenda_de_segmento(self._painel()))
         self.assertIn("100.64.0.0/10", descricoes["cgnat"])
 
+    def test_legenda_omite_segmento_sem_barra(self):
+        """Topologia sem CGNAT visível não desenha essa barra. Explicar um segmento
+        ausente manda o leitor procurar no gráfico algo que não está lá."""
+        caminho = banco_com([
+            (BASE_TS, 1, "192.168.5.1", 0.0, 1.0, 0.5, 0),
+            (BASE_TS, 2, "192.168.0.1", 0.0, 3.0, 1.4, 0),
+            (BASE_TS, 3, "dns.google", 0.0, 9.0, 8.0, 0),
+        ])
+        try:
+            con = consultas.conectar(caminho)
+            try:
+                html = relatorio.painel_culpado(con)
+            finally:
+                con.close()
+        finally:
+            pathlib.Path(caminho).unlink()
+        rotulos = [r for r, _ in legenda_de_segmento(html)]
+        self.assertIn("provedor", rotulos)
+        self.assertNotIn("cgnat", rotulos)
+
     def test_vem_depois_do_grafico_e_antes_da_tabela_de_perda(self):
         html = self._painel()
         self.assertLess(html.index("Latência mínima por segmento"),
@@ -525,6 +545,22 @@ class TestRobustez(unittest.TestCase):
             self.assertIn("Sem dados", html)
         finally:
             pathlib.Path(caminho).unlink()
+
+    def test_subtitulo_ignora_timestamp_implausivel(self):
+        """Uma escrita de CSV interrompida desloca as colunas e o Start_Time recebe um
+        fragmento de latência, virando epoch ~0 na migração. Sem piso, a primeira
+        frase do dashboard anuncia 1969."""
+        caminho = banco_com([
+            (13, 1, "lixo", 0.0, None, None, 0),
+            (BASE_TS, 1, "_gateway", 0.0, 1.0, 0.8, 0),
+            (BASE_TS, 2, "dns.google", 0.0, 9.0, 8.0, 0),
+        ])
+        try:
+            html = relatorio.gerar(caminho)
+        finally:
+            pathlib.Path(caminho).unlink()
+        self.assertNotIn("1969", html)
+        self.assertIn("2026", html)
 
     def test_conteudo_hostil_do_banco_e_escapado(self):
         """Um hostname reverso é dado de terceiro; nunca vai cru para o HTML."""

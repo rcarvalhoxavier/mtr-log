@@ -65,6 +65,47 @@ class TestClassificacaoDeSegmento(unittest.TestCase):
         )
 
 
+class TestSegmentoProvedor(unittest.TestCase):
+    """Roteador do provedor fora de modo bridge aparece como segundo salto privado.
+
+    Sem separá-lo de `lan`, a barra do painel mistura o equipamento do provedor com o
+    do assinante — e como as duas populações têm tamanho parecido, a mediana pousa
+    entre elas e não descreve nenhum dos dois.
+    """
+
+    def test_segundo_salto_privado_e_do_provedor(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "192.168.5.1")
+        inserir_hop(con, 100, 2, "192.168.0.1")
+        inserir_hop(con, 100, 3, "bfb34601.virtua.com.br")
+        obtido = {h: seg for h, seg in con.execute("SELECT hop, segmento FROM v_hop")}
+        self.assertEqual(obtido, {1: "lan", 2: "provedor", 3: "transito"})
+
+    def test_hop_1_continua_lan_mesmo_sendo_privado(self):
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "192.168.5.1")
+        self.assertEqual(
+            con.execute("SELECT segmento FROM v_hop").fetchone()[0], "lan")
+
+    def test_cgnat_no_hop_2_nao_vira_provedor(self):
+        """Em modo bridge o segundo salto é o CGNAT, que não é endereço privado."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway")
+        inserir_hop(con, 100, 2, "100.70.0.1")
+        obtido = {h: seg for h, seg in con.execute("SELECT hop, segmento FROM v_hop")}
+        self.assertEqual(obtido, {1: "lan", 2: "cgnat"})
+
+    def test_privado_solto_no_meio_do_caminho_e_lan_nao_provedor(self):
+        """Um 192.168 no hop 9 é equipamento local respondendo de dentro do caminho,
+        não um segundo nível de NAT."""
+        con = banco_em_memoria()
+        inserir_hop(con, 100, 1, "_gateway")
+        inserir_hop(con, 100, 2, "100.70.0.1")
+        inserir_hop(con, 100, 9, "192.168.5.103")
+        self.assertEqual(
+            con.execute("SELECT segmento FROM v_hop WHERE hop=9").fetchone()[0], "lan")
+
+
 class TestViewRun(unittest.TestCase):
     def test_escolhe_o_hop_de_destino(self):
         con = banco_em_memoria()

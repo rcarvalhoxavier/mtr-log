@@ -9,6 +9,12 @@ DIAS_SERIE_RECENTE = 30
 
 SEGUNDOS_POR_DIA = 86400
 
+# Piso de plausibilidade para um timestamp de coleta. Uma escrita de CSV interrompida
+# desloca as colunas e o Start_Time acaba recebendo um fragmento de latência, virando
+# poucos segundos após o epoch. São linhas de parsing quebrado, não medições, e
+# apresentá-las como dado faria o dashboard anunciar coletas de 1969.
+TS_MINIMO = 946684800  # 2000-01-01
+
 # Quantas execuções a seção "Agora" detalha. Com coleta a cada 5 minutos, 5
 # execuções cobrem ~25 minutos — a janela de "está acontecendo agora".
 EXECUCOES_RECENTES = 5
@@ -28,6 +34,26 @@ def percentil(valores, p):
     ordenados = sorted(valores)
     posicao = math.ceil(p / 100 * len(ordenados))
     return ordenados[max(posicao - 1, 0)]
+
+
+def percentil_ponderado(pares, p):
+    """Percentil sobre pares (valor, frequência), pelo mesmo método do rank mais
+    próximo de `percentil`, sem materializar a lista expandida.
+
+    Existe por custo: numa base real, os milhões de valores de `best` colapsam em
+    poucos milhares de pares distintos, porque a coluna tem duas casas decimais.
+    Agregar no SQL e transferir os pares evita construir milhões de objetos Python.
+    """
+    total = sum(frequencia for _, frequencia in pares)
+    if not total:
+        return None
+    alvo = math.ceil(p / 100 * total)
+    acumulado = 0
+    for valor, frequencia in sorted(pares):
+        acumulado += frequencia
+        if acumulado >= alvo:
+            return valor
+    return max(pares)[0]
 
 
 def ultimo_ts(con):
@@ -71,38 +97,44 @@ def latencia_por_segmento(con):
 
     Usa `best` e não `avg` porque roteadores intermediários despriorizam ICMP:
     o mínimo é muito menos poluído por esse efeito (spec §2.3).
+
+    Segmentos sem amostra nenhuma são omitidos: numa topologia em que o roteador do
+    provedor não está em modo bridge, o CGNAT fica atrás do NAT dele e a faixa
+    100.64.0.0/10 nunca aparece na trace.
     """
     por_segmento = {}
     consulta = (
-        "SELECT segmento, best FROM v_hop"
+        "SELECT segmento, best, COUNT(*) AS n FROM v_hop"
         " WHERE best IS NOT NULL AND segmento != 'desconhecido'"
+        " GROUP BY segmento, best"
     )
     for linha in con.execute(consulta):
-        por_segmento.setdefault(linha["segmento"], []).append(linha["best"])
+        por_segmento.setdefault(linha["segmento"], []).append((linha["best"], linha["n"]))
 
     resultado = []
-    for segmento in ("lan", "cgnat", "transito"):
-        valores = por_segmento.get(segmento)
-        if valores:
+    for segmento in ("lan", "provedor", "cgnat", "transito"):
+        pares = por_segmento.get(segmento)
+        if pares:
             resultado.append({
                 "segmento": segmento,
-                "p50": percentil(valores, 50),
-                "amostras": len(valores),
+                "p50": percentil_ponderado(pares, 50),
+                "amostras": sum(n for _, n in pares),
             })
 
     # A barra "destino" só pode somar execuções que chegaram ao destino;
     # latência de gateway já tem sua própria barra, a de `lan`.
     destino = [
-        linha["best"]
+        (linha["best"], linha["n"])
         for linha in con.execute(
-            "SELECT best FROM v_run WHERE best IS NOT NULL AND completa = 1"
+            "SELECT best, COUNT(*) AS n FROM v_run"
+            " WHERE best IS NOT NULL AND completa = 1 GROUP BY best"
         )
     ]
     if destino:
         resultado.append({
             "segmento": "destino",
-            "p50": percentil(destino, 50),
-            "amostras": len(destino),
+            "p50": percentil_ponderado(destino, 50),
+            "amostras": sum(n for _, n in destino),
         })
     return resultado
 
@@ -195,10 +227,11 @@ def ultimas_execucoes(con, limite=EXECUCOES_RECENTES):
                r.hops, r.completa, r.loss, r.avg, l.classificacao
         FROM v_run r
         JOIN v_loss l ON l.ts = r.ts AND l.host = r.host
+        WHERE r.ts > ?
         ORDER BY r.ts DESC
         LIMIT ?
         """,
-        (limite,),
+        (TS_MINIMO, limite),
     ).fetchall()
     if not resumos:
         return []
