@@ -89,6 +89,34 @@ class TestMigracao(unittest.TestCase):
             self.consultar("SELECT drops FROM mtr_data WHERE hop = 3")[0][0], 10
         )
 
+    def test_migra_banco_que_ja_tem_as_views_do_schema_novo(self):
+        """O monitor.sh novo aplica schema.sql a cada coleta, o que cria as views
+        sobre a tabela ainda legada — o SQLite não valida as colunas de uma view na
+        criação. Depois, o ALTER TABLE tenta reescrever as referências dentro delas e
+        falha com "no such column: ts". Quem faz merge e só então migra cai nisso.
+        """
+        schema = (RAIZ / "scripts" / "schema.sql").read_text(encoding="utf-8")
+        con = sqlite3.connect(self.db)
+        con.executescript(schema)
+        con.close()
+        self.assertEqual(
+            {n for (n,) in self.consultar(
+                "SELECT name FROM sqlite_master WHERE type='view'")},
+            {"v_hop", "v_run", "v_loss"},
+            "pré-condição: as views existem sobre a tabela legada",
+        )
+
+        resultado = self.migrar()
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertEqual(self.consultar("SELECT COUNT(*) FROM mtr_data")[0][0], 4)
+        self.assertEqual(
+            self.consultar("SELECT typeof(ts) FROM mtr_data LIMIT 1")[0][0], "integer"
+        )
+        # As views voltam, agora sobre a tabela tipada.
+        self.assertEqual(
+            self.consultar("SELECT COUNT(*) FROM v_run")[0][0], 1
+        )
+
     def test_e_idempotente(self):
         self.assertEqual(self.migrar().returncode, 0)
         segunda = self.migrar()
