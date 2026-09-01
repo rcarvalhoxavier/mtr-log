@@ -1,0 +1,67 @@
+#!/bin/bash
+# Migra o banco legado (todas as colunas TEXT) para o schema tipado.
+# Idempotente: reexecutar num banco já migrado não faz nada.
+set -euo pipefail
+
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+DB="${1:-$SCRIPT_DIR/../mtr_data.db}"
+SCHEMA="$SCRIPT_DIR/schema.sql"
+
+if [ ! -f "$DB" ]; then
+    echo "banco não encontrado: $DB" >&2
+    exit 1
+fi
+
+# Já migrado? A coluna 'ts' só existe no schema novo.
+if [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('mtr_data') WHERE name='ts';")" -eq 1 ]; then
+    echo "banco já está no schema tipado; nada a fazer"
+    sqlite3 "$DB" < "$SCHEMA"   # garante que as views existem
+    exit 0
+fi
+
+BACKUP="$DB.bak-$(date +%Y%m%d_%H%M%S)"
+cp "$DB" "$BACKUP"
+echo "backup em $BACKUP"
+
+ORIGEM=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT DISTINCT Start_Time, Host, Hop FROM mtr_data);")
+echo "linhas distintas na origem: $ORIGEM"
+
+sqlite3 "$DB" <<SQL
+ALTER TABLE mtr_data RENAME TO mtr_legacy;
+SQL
+
+sqlite3 "$DB" < "$SCHEMA"
+
+sqlite3 "$DB" <<'SQL'
+INSERT OR IGNORE INTO mtr_data
+    (ts, host, hop, ip, loss, snt, drops, last, avg, best, wrst, stdev, version, status)
+SELECT
+    CAST(Start_Time AS INTEGER),
+    Host,
+    CAST(Hop AS INTEGER),
+    NULLIF(Ip, '???'),
+    CAST(Loss AS REAL),
+    CAST(Snt AS INTEGER),
+    CAST(Empty AS INTEGER),
+    CAST(Last AS REAL),
+    CAST(Avg AS REAL),
+    CAST(Best AS REAL),
+    CAST(Wrst AS REAL),
+    CAST(StDev AS REAL),
+    Mtr_Version,
+    Status
+FROM mtr_legacy;
+SQL
+
+DESTINO=$(sqlite3 "$DB" "SELECT COUNT(*) FROM mtr_data;")
+echo "linhas no destino: $DESTINO"
+
+if [ "$ORIGEM" -ne "$DESTINO" ]; then
+    echo "ABORTADO: origem ($ORIGEM) e destino ($DESTINO) divergem." >&2
+    echo "A tabela mtr_legacy foi preservada e o backup está em $BACKUP" >&2
+    exit 1
+fi
+
+sqlite3 "$DB" "DROP TABLE mtr_legacy;"
+sqlite3 "$DB" "VACUUM;"
+echo "migração concluída: $DESTINO linhas"
