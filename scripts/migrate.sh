@@ -2,12 +2,63 @@
 # Migra o banco legado (todas as colunas TEXT) para o schema tipado.
 # Idempotente: reexecutar num banco já migrado não faz nada.
 # PRÉ-CONDIÇÃO: o cron responsável pela escrita (monitor.sh) deve estar pausado antes da migração.
-#               A Task 7 do plano é responsável por fazer isso automaticamente.
+#
+# Uso: migrate.sh [caminho_do_banco] [--aceitar-perda]
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-DB="${1:-$SCRIPT_DIR/../mtr_data.db}"
 SCHEMA="$SCRIPT_DIR/schema.sql"
+
+# --aceitar-perda prossegue quando linhas do banco legado não cabem no schema tipado, e
+# retoma uma migração que abortou no meio. Nunca é o padrão: descartar dado em silêncio
+# é exatamente o que o aborto existe para impedir.
+ACEITAR_PERDA=0
+DB=""
+for arg in "$@"; do
+    if [ "$arg" = "--aceitar-perda" ]; then
+        ACEITAR_PERDA=1
+    else
+        DB="$arg"
+    fi
+done
+DB="${DB:-$SCRIPT_DIR/../mtr_data.db}"
+
+# Linhas do legado cuja chave não sobrevive ao schema tipado. `ts`, `host` e `hop` são
+# NOT NULL, e o INSERT OR IGNORE engole a violação sem avisar.
+SEM_CHAVE_WHERE="CAST(Start_Time AS INTEGER) IS NULL OR Host IS NULL OR CAST(Hop AS INTEGER) IS NULL"
+
+contar_sem_chave() {
+    sqlite3 "$DB" "SELECT COUNT(*) FROM mtr_legacy WHERE $SEM_CHAVE_WHERE;"
+}
+
+promover() {
+    sqlite3 "$DB" <<'SQL'
+INSERT OR IGNORE INTO mtr_data
+    (ts, host, hop, ip, loss, snt, drops, last, avg, best, wrst, stdev, version, status)
+SELECT
+    CAST(Start_Time AS INTEGER),
+    Host,
+    CAST(Hop AS INTEGER),
+    NULLIF(Ip, '???'),
+    CAST(Loss AS REAL),
+    CAST(Snt AS INTEGER),
+    CAST(Empty AS INTEGER),
+    CAST(Last AS REAL),
+    CAST(Avg AS REAL),
+    CAST(Best AS REAL),
+    CAST(Wrst AS REAL),
+    CAST(StDev AS REAL),
+    Mtr_Version,
+    Status
+FROM mtr_legacy;
+SQL
+}
+
+finalizar() {
+    sqlite3 "$DB" "DROP TABLE mtr_legacy;"
+    sqlite3 "$DB" "VACUUM;"
+    echo "migração concluída: $(sqlite3 "$DB" "SELECT COUNT(*) FROM mtr_data;") linhas"
+}
 
 if [ ! -f "$DB" ]; then
     echo "banco não encontrado: $DB" >&2
@@ -22,14 +73,23 @@ fi
 # Detectar estado inconsistente: se mtr_legacy existe, é um aborto anterior não resolvido.
 # Banco já migrado tem 'ts' mas NÃO tem 'mtr_legacy'.
 LEGACY_EXISTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mtr_legacy';")
+
+if [ "$LEGACY_EXISTS" -eq 1 ] && [ "$ACEITAR_PERDA" -eq 1 ]; then
+    echo "estado inconsistente aceito por --aceitar-perda: retomando a migração"
+    promover   # idempotente; só preenche o que ficou faltando
+    echo "linhas sem chave utilizável, descartadas: $(contar_sem_chave)"
+    finalizar
+    exit 0
+fi
+
 if [ "$LEGACY_EXISTS" -eq 1 ]; then
     echo "ERRO: banco em estado inconsistente. A tabela mtr_legacy existe." >&2
     echo "Isto acontece quando a migração anterior foi abortada." >&2
     echo "Decisões possíveis:" >&2
     echo "  1. Restaurar do backup (.bak-YYYYMMDD_HHMMSS) e retentar" >&2
-    echo "  2. Se os dados em mtr_data estão OK, remover mtr_legacy manualmente:" >&2
+    echo "  2. Retomar descartando o que não couber: reexecute com --aceitar-perda" >&2
+    echo "  3. Se os dados em mtr_data já estão OK, remover mtr_legacy manualmente:" >&2
     echo "     sqlite3 $DB \"DROP TABLE mtr_legacy;\"" >&2
-    echo "     E reexecutar este script (será no-op)." >&2
     exit 2
 fi
 
@@ -63,36 +123,24 @@ SQL
 
 sqlite3 "$DB" < "$SCHEMA"
 
-sqlite3 "$DB" <<'SQL'
-INSERT OR IGNORE INTO mtr_data
-    (ts, host, hop, ip, loss, snt, drops, last, avg, best, wrst, stdev, version, status)
-SELECT
-    CAST(Start_Time AS INTEGER),
-    Host,
-    CAST(Hop AS INTEGER),
-    NULLIF(Ip, '???'),
-    CAST(Loss AS REAL),
-    CAST(Snt AS INTEGER),
-    CAST(Empty AS INTEGER),
-    CAST(Last AS REAL),
-    CAST(Avg AS REAL),
-    CAST(Best AS REAL),
-    CAST(Wrst AS REAL),
-    CAST(StDev AS REAL),
-    Mtr_Version,
-    Status
-FROM mtr_legacy;
-SQL
+promover
 
 DESTINO=$(sqlite3 "$DB" "SELECT COUNT(*) FROM mtr_data;")
 echo "linhas no destino: $DESTINO"
 
 if [ "$ORIGEM" -ne "$DESTINO" ]; then
-    echo "ABORTADO: origem ($ORIGEM) e destino ($DESTINO) divergem." >&2
-    echo "A tabela mtr_legacy foi preservada e o backup está em $BACKUP" >&2
-    exit 1
+    SEM_CHAVE=$(contar_sem_chave)
+    if [ "$ACEITAR_PERDA" -eq 0 ]; then
+        echo "ABORTADO: origem ($ORIGEM) e destino ($DESTINO) divergem." >&2
+        echo "$SEM_CHAVE linhas têm Start_Time, Host ou Hop nulos e violam NOT NULL no schema tipado." >&2
+        echo "Para ver quais são:" >&2
+        echo "  sqlite3 $DB \"SELECT Start_Time, Host, Hop, Ip, Status FROM mtr_legacy WHERE $SEM_CHAVE_WHERE;\"" >&2
+        echo "Para prosseguir descartando-as, reexecute com --aceitar-perda." >&2
+        echo "A tabela mtr_legacy foi preservada e o backup está em $BACKUP" >&2
+        exit 1
+    fi
+    echo "AVISO: $((ORIGEM - DESTINO)) linhas descartadas, aceito por --aceitar-perda"
+    echo "  destas, $SEM_CHAVE têm Start_Time, Host ou Hop nulos"
 fi
 
-sqlite3 "$DB" "DROP TABLE mtr_legacy;"
-sqlite3 "$DB" "VACUUM;"
-echo "migração concluída: $DESTINO linhas"
+finalizar
